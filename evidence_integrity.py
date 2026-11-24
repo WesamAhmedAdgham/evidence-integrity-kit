@@ -50,6 +50,8 @@ def evidence_path(root, name):
             raise ValueError(f'Link not permitted: {name!r}')
     if not path.resolve().is_relative_to(root) or not path.is_file():
         raise ValueError(f'Not a regular evidence file: {name!r}')
+    if path.stat().st_nlink != 1:
+        raise ValueError(f'Evidence file must have exactly one hard link: {name!r}')
     return path
 
 
