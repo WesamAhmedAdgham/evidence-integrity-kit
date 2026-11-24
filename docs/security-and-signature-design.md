@@ -1,7 +1,7 @@
 # Security model and signed-manifest v1 design
 
 Status: **implemented experimental protocol; independent review and release approval pending**.
-Reviewed candidate baseline: a9b92e90afe62d654d1302f8a3fe357c40619da4.
+Implementation baseline for this revision: `0a59fe012198e10666bb2cbcaf3f71852829a1d5` (PR #23).
 This design is AI-assisted; it is not a security audit or a release approval.
 The commands below are implemented on the development candidate, not approved for production use.
 
@@ -37,10 +37,11 @@ mutation are residual risks, not accepted as solved by passing unit tests.
 
 | Threat | Current or proposed control | Remaining constraint |
 | --- | --- | --- |
-| Malformed manifest or ambiguous JSON | Bounded exact-size read, duplicate-key and non-finite number rejection, structural preflight | Does not bound all CPU, memory or filesystem latency |
+| Malformed manifest or ambiguous JSON | Bounded exact-size read, 64 nesting levels and 65,536 structural tokens before decoding, duplicate-key and non-finite number rejection | Does not bound all CPU, memory or filesystem latency |
 | Path traversal and aliases | Portable lexical policy, collision checks, lstat, single-link and distinct sampled identity rules | Not an exhaustive filesystem alias detector |
 | POSIX substituted links and root | Descriptor-relative no-follow opening, persistent root, sampled identity | Ancestors above resolved root, mount and directory moves remain possible |
-| Windows substituted links and root | Native directory/leaf guards, no delete sharing, reparse and identity checks | Not NT RootDirectory-relative traversal; reparse changes between samples remain possible |
+| Windows substituted links and root | Sampled mode uses native guards; explicit deny-write mode uses NT RootDirectory-relative descendant opens, local NTFS scope and held handles | Sampled mode is not native relative traversal; guarded mode still trusts drive mapping, root namespace and privileged actors |
+| Linux Btrfs snapshot scope | Root-owned read-only subvolume, expected UUID, openat2 restrictions, device/mount/subvolume checks | Requires trusted provisioning, mount namespace, privilege and capability controls; no native APFS mode in this candidate |
 | File changes during read | Sampled identity and metadata checks, size-bounded hashing and EOF probe | Same-size, reverted or metadata-indistinguishable changes may evade detection |
 | Earlier file changes during a batch | Final pathname metadata revalidation | Sequential checks are not an atomic snapshot |
 | Manifest forgery or alteration | Detached Ed25519 signature | Requires a genuinely trusted public key |
@@ -90,6 +91,13 @@ additional PEM blocks, unrelated prefix/suffix data, private keys and
 unsupported key types. No automatic key discovery or network lookup.
 Display SHA-256 of the 32-byte raw public key as a fingerprint in authenticated
 verification output. A fingerprint aids comparison; it does not establish trust.
+The admitted SPKI is exactly the canonical 44-byte RFC 8410 envelope. This
+checks format, not full mathematical point validity. Provision the trusted
+key from a dedicated, securely generated Ed25519 signing key and authenticate
+its raw-key SHA-256 fingerprint independently. Do not import arbitrary
+untrusted point encodings as trust anchors. F02 remains open pending locked-
+provider negative validation and independent disposition; no extra dependency
+or custom curve arithmetic is approved by this document.
 
 Private keys: one encrypted PKCS#8 PEM block, maximum 16 KiB, exact Ed25519
 key type. Require an interactive non-echoing passphrase prompt; fail if the
@@ -100,6 +108,19 @@ sensitive material. Use established local key-management tooling to generate
 and protect keys, with restrictive permissions/ACLs and backups. No automatic
 key generation, persistent key cache, key upload or recovery in the initial
 scope. Python cannot guarantee secret memory zeroization.
+
+The admitted outer DER profile is PBES2/PBKDF2-HMAC-SHA256/AES-256-CBC,
+2,048–1,000,000 iterations, 8–64-byte salt, 16-byte IV, 16–4,096-byte
+block-aligned ciphertext and an optional exact 32-byte key length. Passwords
+are limited to 1,024 bytes after interactive collection/encoding and before
+decryption. For newly provisioned keys, the proposed operator policy is at
+least 600,000 iterations and at least 16 bytes of random salt, within the
+admitted upper bounds, with a high-entropy passphrase. This is a provisioning
+recommendation, not a runtime minimum or a certification of password strength.
+Legacy imports below the recommendation remain technically supported and
+should be re-encrypted securely under the stronger policy; no change to the
+legacy admission bounds is made here. Independent acceptance of F03 remains
+required.
 
 The crypto dependency is optional for ordinary unsigned operations. Choose a
 supported, security-reviewed version and reproducible pinned dependency set
@@ -133,7 +154,10 @@ matching evidence. Add a signed-mode authentication object with the fixed
 protocol identifier, verified=true and trusted key fingerprint; no claim of
 verified evidence when only signature verification has succeeded.
 
-Keep existing create/verify commands and their unsigned JSON contract intact.
+Keep the unsigned create/verify manifest format; callers must select exactly
+one explicit protection mode (assumed-stable tree, Windows deny-write, or Linux
+Btrfs snapshot). Verification reports include mode-specific protection metadata;
+this CLI contract is not fully backward-compatible with the original unsigned CLI.
 Do not automatically try unsigned mode if a signature is absent or invalid.
 Unsigned verify may check only hashes; documentation must require callers
 that need authentication to invoke verify-signed explicitly. Signed mode
@@ -173,7 +197,7 @@ Before merge, test at minimum:
 - Failed authentication must not call JSON decoding or evidence hashing;
   confirm verification and parsing use the same bytes despite file replacement.
 - Signed valid manifest with altered/missing evidence, correct exit codes,
-  preserved result order, and no change to the unsigned interface.
+  preserved result order, and the documented explicit-protection CLI contract.
 - Bounded read and cleanup regressions for every new control input; native
   Linux/macOS/Windows CI with platform-specific skips justified, no silent
   crypto skip; synthetic keys only, never a production key.
