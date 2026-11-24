@@ -33,7 +33,7 @@ Unsigned verification does **not** authenticate the manifest or establish author
 python -m unittest discover -s tests -v
 ```
 
-Native CI requires platform-appropriate fixtures. The split needs its own exact-head test results. The existing signing-provider ruleset remains unchanged and blocks merging until an explicitly reviewed scope-appropriate policy is available. See [split review record](docs/unsigned-core-split.md).
+Native CI requires platform-appropriate fixtures. The split needs its own exact-head test results. The proposed scope-aware CI retains the twelve required contexts: exact unsigned payload validation explicitly reports signing-provider NOT APPLICABLE, never provider approval. Unknown or signing payload fails closed in this workflow. The signed development branch retains the full provider gate. Review of the policy and candidate remains required. See [split review record](docs/unsigned-core-split.md).
 
 ## Status and provenance
 
