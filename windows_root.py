@@ -1,11 +1,14 @@
-"""Native Windows root guard; this module is imported only on Windows."""
+"""Native Windows evidence guards; this module is imported only on Windows."""
 import ctypes
+import msvcrt
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 
 
 # Win32 fileapi.h, minwinbase.h, winnt.h.
+GENERIC_READ = 0x80000000
+FILE_TYPE_DISK = 0x0001
 FILE_LIST_DIRECTORY = 0x0001
 FILE_READ_ATTRIBUTES = 0x0080
 FILE_SHARE_READ = 0x0001
@@ -39,6 +42,9 @@ _info.restype = wintypes.BOOL
 _close = _kernel.CloseHandle
 _close.argtypes = [wintypes.HANDLE]
 _close.restype = wintypes.BOOL
+_file_type = _kernel.GetFileType
+_file_type.argtypes = [wintypes.HANDLE]
+_file_type.restype = wintypes.DWORD
 
 
 @contextmanager
@@ -96,3 +102,62 @@ def pinned_windows_root(root):
         check_windows_root(root, guard)
         yield guard
         check_windows_root(root, guard)
+
+
+def checked_file_fd(path, flags):
+    """Open a read-only leaf without following its final reparse point."""
+    handle = _create(os.fspath(path), GENERIC_READ,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
+                     FILE_FLAG_OPEN_REPARSE_POINT, None)
+    if handle == INVALID_HANDLE_VALUE or handle is None:
+        raise ctypes.WinError(ctypes.get_last_error())
+    transferred = False
+    try:
+        if _file_type(handle) != FILE_TYPE_DISK:
+            raise ValueError('Evidence must be a disk file')
+        attributes = FileAttributeTagInfo()
+        if not _info(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS,
+                     ctypes.byref(attributes), ctypes.sizeof(attributes)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if attributes.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError('Evidence leaf must be a regular file without reparse points')
+        # On success, the CRT descriptor owns the handle; Python's open()
+        # owns the descriptor returned by this opener.
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+        transferred = True
+        return fd
+    finally:
+        if not transferred and not _close(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+
+@contextmanager
+def guarded_windows_file(root, parts, guard):
+    """Hold checked directory handles while opening and reading one leaf.
+
+    This uses absolute Win32 paths with pinned prefixes, not NT
+    RootDirectory-relative opens. Callers must supply validated components.
+    """
+    check_windows_root(root, guard)
+    with ExitStack() as stack:
+        directories = []
+        path = root
+        for part in parts[:-1]:
+            path = path / part
+            handle = stack.enter_context(directory_handle(path))
+            directories.append((path, handle, directory_identity(handle)))
+
+        def check_directories():
+            check_windows_root(root, guard)
+            for directory, handle, expected in directories:
+                if directory_identity(handle) != expected:
+                    raise ValueError('Evidence directory identity changed')
+                with directory_handle(directory) as current:
+                    if directory_identity(current) != expected:
+                        raise ValueError('Evidence directory identity changed')
+
+        check_directories()
+        with open(path / parts[-1], 'rb', opener=checked_file_fd) as stream:
+            check_directories()
+            yield stream
+            check_directories()

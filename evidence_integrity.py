@@ -121,7 +121,9 @@ def open_evidence(path, *, root=None, name=None, root_fd=None):
         # A substituted manifest FIFO must not block before descriptor validation.
         return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
     if os.name == 'nt' and root is not None:
+        from windows_root import guarded_windows_file
         check_root_identity(root, root_fd)
+        return guarded_windows_file(root, validate_relative_path(name), root_fd)
     return path.open('rb')
 
 

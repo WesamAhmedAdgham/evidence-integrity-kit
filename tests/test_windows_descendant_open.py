@@ -64,3 +64,56 @@ class WindowsDescendantTests(unittest.TestCase):
     def test_stable_nested_file_remains_valid(self):
         manifest = kit.generate(self.root, ['parent/a.txt'])
         self.assertTrue(kit.verify(self.root, manifest)['ok'])
+
+    def test_leaf_symlink_substitution_rejected_before_hashing(self):
+        target = self.parent / 'original.txt'
+
+        def substitute(path, *args, **kwargs):
+            self.path.rename(target)
+            self.path.symlink_to(target)
+            self.assertTrue(self.path.is_symlink())
+            self.assertTrue(os.path.samestat(self.original, self.path.stat()))
+            self.substituted = True
+            return self.real_open(path, *args, **kwargs)
+
+        with patch.object(kit, 'open_evidence', side_effect=substitute), \
+                patch.object(kit.hashlib, 'file_digest', wraps=kit.hashlib.file_digest) as digest:
+            with self.assertRaises((OSError, ValueError)):
+                kit.generate(self.root, ['parent/a.txt'])
+            self.assertTrue(self.substituted)
+            digest.assert_not_called()
+
+    def test_parent_rename_denied_during_read_and_allowed_after(self):
+        original_digest = kit.hashlib.file_digest
+        attempted = []
+
+        def check_sharing(stream, algorithm):
+            with self.assertRaises(OSError) as raised:
+                self.parent.rename(self.moved)
+            self.assertIn(raised.exception.winerror, (5, 32))
+            attempted.append(True)
+            return original_digest(stream, algorithm)
+
+        with patch.object(kit.hashlib, 'file_digest', side_effect=check_sharing):
+            kit.generate(self.root, ['parent/a.txt'])
+        self.assertEqual(attempted, [True])
+        self.parent.rename(self.moved)
+        self.assertTrue((self.moved / 'a.txt').is_file())
+
+    def test_parent_guard_released_on_leaf_open_failure(self):
+        missing = self.parent / 'missing.txt'
+        with kit.pinned_root(self.root) as guard:
+            with self.assertRaises(OSError):
+                with kit.open_evidence(missing, root=self.root,
+                                       name='parent/missing.txt', root_fd=guard):
+                    self.fail('Missing leaf unexpectedly opened')
+            self.parent.rename(self.moved)
+            self.assertTrue(self.moved.is_dir())
+
+    def test_binary_contents_are_not_text_translated(self):
+        data = b'\x00\x1a\r\n\xff\x80'
+        self.path.write_bytes(data)
+        expected = kit.hashlib.sha256(data).hexdigest()
+        manifest = kit.generate(self.root, ['parent/a.txt'])
+        self.assertEqual(manifest['files'][0]['sha256'], expected)
+        self.assertTrue(kit.verify(self.root, manifest)['ok'])
