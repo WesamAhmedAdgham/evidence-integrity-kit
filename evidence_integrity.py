@@ -190,12 +190,12 @@ def generate(root, names):
     return {'version': 1, 'algorithm': 'sha256', 'files': files}
 
 
-def verify(root, manifest):
-    root = Path(root).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError('Evidence root must be a directory')
+def validate_manifest(manifest, *, strict=False):
+    """Validate the schema without accessing the evidence filesystem."""
     if not isinstance(manifest, dict) or type(manifest.get('version')) is not int or manifest['version'] != 1 or manifest.get('algorithm') != 'sha256':
         raise ValueError('Unsupported manifest format')
+    if strict and set(manifest) != {'version', 'algorithm', 'files'}:
+        raise ValueError('Unexpected signed manifest fields')
     entries = manifest.get('files')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Manifest must contain at least one file')
@@ -206,12 +206,22 @@ def verify(root, manifest):
     for item in entries:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not isinstance(item.get('sha256'), str) or not HEX.fullmatch(item['sha256']):
             raise ValueError('Invalid manifest entry')
+        if strict and set(item) != {'path', 'sha256'}:
+            raise ValueError('Unexpected signed manifest entry fields')
         name = item['path']
         check_path_collisions(name, prefixes)
         if name in seen:
             raise ValueError(f'Duplicate path: {name!r}')
         seen.add(name)
         validated.append((name, item['sha256']))
+    return validated
+
+
+def verify(root, manifest):
+    root = Path(root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError('Evidence root must be a directory')
+    validated = validate_manifest(manifest)
     results = []
     processed = []
     with pinned_root(root) as root_fd:
@@ -248,28 +258,44 @@ def reject_nonfinite_constant(value):
     raise ValueError(f'Non-standard JSON constant: {value}')
 
 
-def load_manifest(path):
+def read_control_bytes(path, *, limit, label):
+    """Read bounded binary control input with sampled identity/stability checks."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError('Invalid control input byte limit')
     expected = path.stat()
     if not stat.S_ISREG(expected.st_mode):
-        raise ValueError('Manifest must be a regular file')
+        raise ValueError(f'{label} must be a regular file')
     with open_evidence(path) as stream:
         before = os.fstat(stream.fileno())
         if not stat.S_ISREG(before.st_mode):
-            raise ValueError('Manifest must be a regular file')
+            raise ValueError(f'{label} must be a regular file')
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
-            raise ValueError('Manifest identity changed or unavailable')
+            raise ValueError(f'{label} identity changed or unavailable')
         if content_metadata_changed(expected, before):
-            raise ValueError('Manifest changed before reading')
-        raw = stream.read(MAX_MANIFEST_BYTES + 1)
+            raise ValueError(f'{label} changed before reading')
+        raw = stream.read(limit + 1)
         after = os.fstat(stream.fileno())
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
         if any(getattr(before, field) != getattr(after, field) for field in fields):
-            raise ValueError('Manifest changed during reading')
+            raise ValueError(f'{label} changed during reading')
         current = path.stat()
         if not current.st_ino or not os.path.samestat(after, current):
-            raise ValueError('Manifest path changed during reading')
+            raise ValueError(f'{label} path changed during reading')
         if content_metadata_changed(after, current):
-            raise ValueError('Manifest changed after reading')
+            raise ValueError(f'{label} changed after reading')
+    if len(raw) > limit:
+        raise ValueError(f'{label} exceeds {limit} byte limit')
+    return raw
+
+
+def read_manifest_bytes(path):
+    return read_control_bytes(path, limit=MAX_MANIFEST_BYTES, label='Manifest')
+
+
+def decode_manifest(raw):
+    """Parse only the supplied immutable bytes; never reopen a pathname."""
+    if not isinstance(raw, bytes):
+        raise ValueError('Manifest input must be bytes')
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
     try:
@@ -279,6 +305,10 @@ def load_manifest(path):
     except RecursionError as exc:
         raise ValueError('Manifest JSON nesting exceeds decoder limit') from exc
 
+
+
+def load_manifest(path):
+    return decode_manifest(read_manifest_bytes(path))
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
