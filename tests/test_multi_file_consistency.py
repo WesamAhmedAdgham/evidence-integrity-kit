@@ -78,3 +78,46 @@ class MultiFileConsistencyTests(unittest.TestCase):
         manifest = kit.generate(self.root, ['b.txt', 'a.txt'])
         self.assertEqual([entry['path'] for entry in manifest['files']], ['a.txt', 'b.txt'])
         self.assertTrue(kit.verify(self.root, manifest)['ok'])
+
+    def test_verify_reports_changed_entry_without_reordering_or_rehashing(self):
+        manifest = kit.generate(self.root, ['a.txt', 'b.txt'])
+        with patch.object(kit, 'digest', side_effect=self.mutate_after_first('append')) as digest:
+            report = kit.verify(self.root, manifest)
+        self.assertTrue(self.changed)
+        self.assertFalse(report['ok'])
+        self.assertEqual(digest.call_count, 2)
+        self.assertEqual([(item['path'], item['status']) for item in report['files']],
+                         [('a.txt', 'error'), ('b.txt', 'match')])
+        self.assertIn('Evidence changed before operation completion', report['files'][0]['detail'])
+
+    def test_verify_reports_previously_hashed_file_removed(self):
+        manifest = kit.generate(self.root, ['a.txt', 'b.txt'])
+
+        def remove(*args, **kwargs):
+            result = self.real_digest(*args, **kwargs)
+            if kwargs['name'] == 'a.txt':
+                self.first.unlink()
+                self.changed = True
+            return result
+
+        with patch.object(kit, 'digest', side_effect=remove):
+            report = kit.verify(self.root, manifest)
+        self.assertTrue(self.changed)
+        self.assertFalse(self.first.exists())
+        self.assertFalse(report['ok'])
+        self.assertEqual([(item['path'], item['status']) for item in report['files']],
+                         [('a.txt', 'error'), ('b.txt', 'match')])
+
+    def test_create_reports_previously_hashed_file_removed(self):
+        def remove(*args, **kwargs):
+            result = self.real_digest(*args, **kwargs)
+            if kwargs['name'] == 'a.txt':
+                self.first.unlink()
+                self.changed = True
+            return result
+
+        with patch.object(kit, 'digest', side_effect=remove):
+            with self.assertRaises(FileNotFoundError):
+                kit.generate(self.root, ['a.txt', 'b.txt'])
+        self.assertTrue(self.changed)
+        self.assertFalse(self.first.exists())

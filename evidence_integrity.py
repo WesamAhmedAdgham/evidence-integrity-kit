@@ -156,6 +156,17 @@ def digest(path, expected, *, root, name, root_fd):
         return result
 
 
+def revalidate_processed_file(root, name, expected, root_fd):
+    """Compare pathname samples without reopening file contents."""
+    check_root_identity(root, root_fd)
+    _, current = evidence_path(root, name)
+    fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if (not expected.st_ino or not current.st_ino or
+            not os.path.samestat(expected, current) or
+            any(getattr(expected, field) != getattr(current, field) for field in fields)):
+        raise ValueError(f'Evidence changed before operation completion: {name!r}')
+
+
 def generate(root, names):
     root = Path(root).resolve(strict=True)
     if not root.is_dir() or not names:
@@ -166,11 +177,16 @@ def generate(root, names):
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
     files = []
+    processed = []
     with pinned_root(root) as root_fd:
         for name in sorted(names):
             check_root_identity(root, root_fd)
-            files.append({'path': name, 'sha256': digest(*evidence_path(root, name),
-                         root=root, name=name, root_fd=root_fd)})
+            path, expected = evidence_path(root, name)
+            value = digest(path, expected, root=root, name=name, root_fd=root_fd)
+            files.append({'path': name, 'sha256': value})
+            processed.append((name, expected))
+        for name, expected in processed:
+            revalidate_processed_file(root, name, expected, root_fd)
     return {'version': 1, 'algorithm': 'sha256', 'files': files}
 
 
@@ -197,15 +213,25 @@ def verify(root, manifest):
         seen.add(name)
         validated.append((name, item['sha256']))
     results = []
+    processed = []
     with pinned_root(root) as root_fd:
         for name, expected_digest in validated:
             check_root_identity(root, root_fd)
             try:
-                status = 'match' if digest(*evidence_path(root, name), root=root, name=name, root_fd=root_fd) == expected_digest else 'mismatch'
+                path, expected = evidence_path(root, name)
+                value = digest(path, expected, root=root, name=name, root_fd=root_fd)
+                status = 'match' if value == expected_digest else 'mismatch'
             except (OSError, ValueError) as exc:
                 results.append({'path': name, 'status': 'error', 'detail': str(exc)})
             else:
+                if status == 'match':
+                    processed.append((len(results), name, expected))
                 results.append({'path': name, 'status': status})
+        for index, name, expected in processed:
+            try:
+                revalidate_processed_file(root, name, expected, root_fd)
+            except (OSError, ValueError) as exc:
+                results[index] = {'path': name, 'status': 'error', 'detail': str(exc)}
     return {'ok': all(r['status'] == 'match' for r in results), 'files': results}
 
 
