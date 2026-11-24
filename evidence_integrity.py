@@ -145,12 +145,23 @@ def reject_nonfinite_constant(value):
 
 
 def load_manifest(path):
-    if not path.is_file():
+    expected = path.stat()
+    if not stat.S_ISREG(expected.st_mode):
         raise ValueError('Manifest must be a regular file')
     with open_evidence(path) as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode):
             raise ValueError('Manifest must be a regular file')
+        if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
+            raise ValueError('Manifest identity changed or unavailable')
         raw = stream.read(MAX_MANIFEST_BYTES + 1)
+        after = os.fstat(stream.fileno())
+        fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        if any(getattr(before, field) != getattr(after, field) for field in fields):
+            raise ValueError('Manifest changed during reading')
+        current = path.stat()
+        if not current.st_ino or not os.path.samestat(after, current):
+            raise ValueError('Manifest path changed during reading')
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
     try:
