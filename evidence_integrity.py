@@ -50,7 +50,8 @@ def verify(root, manifest):
     if not isinstance(entries, list) or not entries:
         raise ValueError('Manifest must contain at least one file')
     seen = set()
-    results = []
+    # Validate every entry before touching any evidence file.
+    validated = []
     for item in entries:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not isinstance(item.get('sha256'), str) or not HEX.fullmatch(item['sha256']):
             raise ValueError('Invalid manifest entry')
@@ -58,8 +59,11 @@ def verify(root, manifest):
         if name in seen:
             raise ValueError(f'Duplicate path: {name!r}')
         seen.add(name)
+        validated.append((name, item['sha256']))
+    results = []
+    for name, expected_digest in validated:
         try:
-            status = 'match' if digest(evidence_path(root, name)) == item['sha256'] else 'mismatch'
+            status = 'match' if digest(evidence_path(root, name)) == expected_digest else 'mismatch'
         except (OSError, ValueError) as exc:
             results.append({'path': name, 'status': 'error', 'detail': str(exc)})
         else:
