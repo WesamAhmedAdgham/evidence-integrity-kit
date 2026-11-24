@@ -13,6 +13,8 @@ from importlib.metadata import version
 # merely because its version is newer: record independent provenance and
 # applicability review, update the wheel lock and rerun the native matrix.
 APPROVED_PROVIDERS = frozenset()
+# Independent wheel/provenance and embedded libsodium review required.
+APPROVED_POINT_VALIDATORS = frozenset()
 
 
 def provider_status(crypto_version, openssl_text):
@@ -27,16 +29,26 @@ def provider_status(crypto_version, openssl_text):
     return True, 'Provider pair is on the reviewed release allowlist'
 
 
+def validator_status(validator_version):
+    if validator_version not in APPROVED_POINT_VALIDATORS:
+        return False, 'Exact point-validation provider is not release-approved'
+    return True, 'Point-validation provider is on the reviewed release allowlist'
+
+
 def main():
     from cryptography.hazmat.backends.openssl.backend import backend
 
     crypto_version = version('cryptography')
     openssl_text = backend.openssl_version_text()
     approved, reason = provider_status(crypto_version, openssl_text)
+    validator_version = version('PyNaCl')
+    validator_approved, validator_reason = validator_status(validator_version)
     print(json.dumps({'cryptography': crypto_version, 'openssl': openssl_text,
-                      'provider_release_gate_passed': approved, 'reason': reason},
+                      'pynacl': validator_version,
+                      'provider_release_gate_passed': approved and validator_approved,
+                      'reason': reason, 'validator_reason': validator_reason},
                      sort_keys=True))
-    return 0 if approved else 1
+    return 0 if approved and validator_approved else 1
 
 
 if __name__ == '__main__':

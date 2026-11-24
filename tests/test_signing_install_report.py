@@ -50,8 +50,8 @@ class SigningReportTests(unittest.TestCase):
     def test_committed_lock_matches_expected_packages(self):
         root = Path(__file__).resolve().parents[1]
         pins = load_lock(root / 'requirements-signing.txt')
-        self.assertEqual(set(pins), {'cryptography', 'cffi', 'pycparser'})
-        self.assertEqual(sum(len(entry[1]) for entry in pins.values()), 10)
+        self.assertEqual(set(pins), {'cryptography', 'cffi', 'pycparser', 'pynacl'})
+        self.assertEqual(sum(len(entry[1]) for entry in pins.values()), 13)
 
     def test_malformed_or_duplicate_lock_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:

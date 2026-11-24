@@ -189,3 +189,8 @@ PR #23 exact earlier head `7e3565431b11bc79eba55d015b43f6e3dec5cd05`, run 453238
 ## F07 JSON resource-budget follow-up
 
 Development-only remediation: limit JSON nesting to 64 and structural tokens to 65,536 before decoding. Preserve the existing byte cap, strict decoder, signed authentication ordering and schema/path checks. Local isolated decoder tests passed 9 methods including 10,000 seeded generated documents; two legacy excessive-nesting message checks also passed. No full local suite or native CI result claimed for this change. Require cumulative native CI and independent review before accepting F07; remaining process-resource limits and compatibility restrictions are explicit. No provider gate change or release approval.
+
+
+## F02 draft runtime integration (not approved)
+
+Evaluation PR #25 exact head 96b734e15cda27873e17ac0211cc2b5cf44b5cca, run 45466885008: all six evaluation jobs completed with 12 methods each, 72 passed, zero skips/failures, including the seven CLI hook integration methods. Earlier run 45464785795 verified actual wheel bytes (24 checks across 13 distinct artifacts) and native point-admission cases. The draft runtime candidate is based on PR #24, not the evaluation branch. It uses lazy PyNaCl validation before generic public-key parsing and adds nine direct runtime tests (no loader hook). Its signing lock adds only the three evaluated wheel hashes; unsigned execution stays stdlib-only. The release gate additionally requires explicit independent point-validator approval; both allowlists remain empty. No independent publisher attestation, OpenSSL approval, final CI or merge authorization is claimed.

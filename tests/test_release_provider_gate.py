@@ -29,6 +29,13 @@ class ProviderGateTests(unittest.TestCase):
             self.assertFalse(gate.provider_status('different', pair[1])[0])
             self.assertFalse(gate.provider_status(pair[0], 'OpenSSL 4.0.4')[0])
 
+    def test_point_validator_requires_explicit_approval(self):
+        self.assertFalse(gate.validator_status('1.6.2')[0])
+        self.assertFalse(gate.validator_status('99.0.0')[0])
+        with patch.object(gate, 'APPROVED_POINT_VALIDATORS', frozenset({'synthetic'})):
+            self.assertTrue(gate.validator_status('synthetic')[0])
+            self.assertFalse(gate.validator_status('1.6.2')[0])
+
     def test_known_affected_pair_cannot_be_approved_by_allowlist(self):
         pair = ('50.0.2', 'OpenSSL 4.0.3 29 Sep 2026')
         with patch.object(gate, 'APPROVED_PROVIDERS', frozenset({pair})):

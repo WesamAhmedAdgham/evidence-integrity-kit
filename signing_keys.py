@@ -50,11 +50,23 @@ def serialization_provider():
     return ed25519, serialization, unsupported
 
 
+def _point_validator():
+    """Import only for explicit verification; unsigned operation stays stdlib-only."""
+    from nacl.bindings import crypto_core_ed25519_is_valid_point
+    return crypto_core_ed25519_is_valid_point
+
+
 def load_public_key(raw):
     der = pem_payload(raw, PUBLIC_LABEL)
     # Admit only the fixed canonical RFC 8410 envelope before generic parsing.
     if len(der) != len(ED25519_SPKI_PREFIX) + 32 or not der.startswith(ED25519_SPKI_PREFIX):
         raise ValueError('Ed25519 public key required in canonical SPKI encoding')
+    try:
+        accepted = _point_validator()(der[len(ED25519_SPKI_PREFIX):])
+    except (ImportError, OSError, RuntimeError, ValueError, TypeError):
+        raise ValueError('Ed25519 point-validation provider unavailable') from None
+    if accepted is not True:
+        raise ValueError('Invalid Ed25519 public point')
     ed25519, serialization, unsupported = serialization_provider()
     try:
         key = serialization.load_der_public_key(der)

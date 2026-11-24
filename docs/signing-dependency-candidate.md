@@ -76,3 +76,8 @@ Other wheel variants are deliberately not allowed.
 | `cffi-2.1.1-cp311-cp311-macosx_11_0_arm64.whl` | `398aff33cee2767e3e781d2554c54bd0dff386bb437581e0d8011fde1a942ec1` |
 | `cffi-2.1.1-cp313-cp313-macosx_11_0_arm64.whl` | `19ee6127ee34de7d83ce3d371ebc5ed91addbdcc39f9ab15ce4eb35a4e534971` |
 | `pycparser-3.0-py3-none-any.whl` | `b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992` |
+
+
+## Proposed point-validator dependency — not approved
+
+PyNaCl 1.6.2, three pinned wheel hashes verified by byte hashing in PR #25 run 45464785795, with 72 evaluation/integration methods passed in run 45466885008. Upstream reports the bundled libsodium fix for CVE-2025-69277; independent publisher and patch provenance, review of current advisories and the final integration matrix remain required. This draft adds PyNaCl to the signing lock but does not approve it. OpenSSL 4.0.3 is still blocked. The point-validator release allowlist is empty.

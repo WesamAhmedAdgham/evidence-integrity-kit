@@ -91,13 +91,10 @@ additional PEM blocks, unrelated prefix/suffix data, private keys and
 unsupported key types. No automatic key discovery or network lookup.
 Display SHA-256 of the 32-byte raw public key as a fingerprint in authenticated
 verification output. A fingerprint aids comparison; it does not establish trust.
-The admitted SPKI is exactly the canonical 44-byte RFC 8410 envelope. This
-checks format, not full mathematical point validity. Provision the trusted
+The admitted SPKI is exactly the canonical 44-byte RFC 8410 envelope. Canonical encoding alone checks format, not full mathematical point validity. The draft F02 implementation invokes the PyNaCl point validator before PyCA loading and fails closed if it rejects or is unavailable. Provision the trusted
 key from a dedicated, securely generated Ed25519 signing key and authenticate
 its raw-key SHA-256 fingerprint independently. Do not import arbitrary
-untrusted point encodings as trust anchors. F02 remains open pending locked-
-provider negative validation and independent disposition; no extra dependency
-or custom curve arithmetic is approved by this document.
+untrusted point encodings as trust anchors. F02 isolated evaluation passed; this draft integration still requires exact-head CI, independent wheel and publisher provenance review, and explicit approval. No custom curve arithmetic is introduced.
 
 Private keys: one encrypted PKCS#8 PEM block, maximum 16 KiB, exact Ed25519
 key type. Require an interactive non-echoing passphrase prompt; fail if the

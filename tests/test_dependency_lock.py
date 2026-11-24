@@ -13,11 +13,11 @@ class DependencyLockTests(unittest.TestCase):
         pattern = re.compile(r'(\w+)==([\d.]+)((?:\s+--hash=sha256:[0-9a-f]{64})+)')
         matches = list(pattern.finditer(requirements))
         self.assertEqual([(m[1], m[2]) for m in matches],
-                         [('cryptography', '50.0.2'), ('cffi', '2.1.1'), ('pycparser', '3.0')])
+                         [('cryptography', '50.0.2'), ('cffi', '2.1.1'), ('pycparser', '3.0'), ('pynacl', '1.6.2')])
         counts = [len(re.findall(r'--hash=sha256:[0-9a-f]{64}', m[3])) for m in matches]
-        self.assertEqual(counts, [3, 6, 1])
+        self.assertEqual(counts, [3, 6, 1, 3])
         hashes = re.findall(r'--hash=sha256:([0-9a-f]{64})', requirements)
-        self.assertEqual(len(set(hashes)), 10)
+        self.assertEqual(len(set(hashes)), 13)
         self.assertEqual(pattern.sub('', requirements).strip(), '')
         workflow = (root / '.github' / 'workflows' / 'tests.yml').read_text()
         self.assertIn('--require-hashes', workflow)
