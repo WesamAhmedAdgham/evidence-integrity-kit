@@ -36,12 +36,27 @@ def validate_relative_path(name):
 def check_path_collisions(name, prefixes):
     node = prefixes
     for part in validate_relative_path(name):
+        # None is a terminal marker; normalized component keys are always strings.
+        if None in node:
+            raise ValueError(f'Portable path collision: file is also a directory in {name!r}')
         normalized = unicodedata.normalize('NFC', part)
         key = unicodedata.normalize('NFC', normalized.casefold())
         previous, children = node.setdefault(key, (part, {}))
         if previous != part:
             raise ValueError(f'Portable path collision in {name!r}: {previous!r} and {part!r}')
         node = children
+    if node and None not in node:
+        raise ValueError(f'Portable path collision: file is also a directory in {name!r}')
+    node[None] = True
+
+
+def resolve_path(path, *, strict=False):
+    # Python 3.11/3.12 can raise RuntimeError for symbolic-link loops;
+    # newer Python versions report an OSError or return a non-strict path.
+    try:
+        return path.resolve(strict=strict)
+    except RuntimeError as exc:
+        raise ValueError('Unable to resolve path') from exc
 
 
 def evidence_path(root, name):
@@ -53,7 +68,7 @@ def evidence_path(root, name):
         if (stat.S_ISLNK(metadata.st_mode) or
                 getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError(f'Link not permitted: {name!r}')
-    if not path.resolve().is_relative_to(root) or not stat.S_ISREG(metadata.st_mode):
+    if not resolve_path(path).is_relative_to(root) or not stat.S_ISREG(metadata.st_mode):
         raise ValueError(f'Not a regular evidence file: {name!r}')
     if metadata.st_nlink != 1:
         raise ValueError(f'Evidence file must have exactly one hard link: {name!r}')
@@ -168,13 +183,15 @@ def revalidate_processed_file(root, name, expected, root_fd):
 
 
 def generate(root, names):
-    root = Path(root).resolve(strict=True)
-    if not root.is_dir() or not names:
+    if not names:
         raise ValueError('A directory and unique file paths are required')
     prefixes = {}
     for name in names:
         check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
+        raise ValueError('A directory and unique file paths are required')
+    root = resolve_path(Path(root), strict=True)
+    if not root.is_dir():
         raise ValueError('A directory and unique file paths are required')
     files = []
     processed = []
@@ -218,10 +235,10 @@ def validate_manifest(manifest, *, strict=False):
 
 
 def verify(root, manifest):
-    root = Path(root).resolve(strict=True)
+    validated = validate_manifest(manifest)
+    root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('Evidence root must be a directory')
-    validated = validate_manifest(manifest)
     results = []
     processed = []
     with pinned_root(root) as root_fd:
