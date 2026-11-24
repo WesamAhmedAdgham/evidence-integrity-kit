@@ -65,6 +65,13 @@ class ManifestJsonTests(unittest.TestCase):
         result = self.run_cli(self.valid[:-1] + ', "extra": {"label": "NaN", "number": 1.5}}')
         self.assertEqual(result.returncode, 0, result)
 
+    def test_excessive_nesting(self):
+        depth = 20000
+        for raw in ('[' * depth + '0' + ']' * depth,
+                    '{"x":' * depth + '0' + '}' * depth):
+            with self.subTest(kind=raw[0]):
+                self.assert_rejected(raw, 'Manifest JSON nesting exceeds decoder limit')
+
     def test_malformed_json(self):
         self.assert_rejected('{', 'Error:')
 

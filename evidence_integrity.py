@@ -80,9 +80,12 @@ def reject_nonfinite_constant(value):
 
 
 def load_manifest(path):
-    return json.loads(path.read_text(encoding='utf-8'),
-                      object_pairs_hook=reject_duplicate_keys,
-                      parse_constant=reject_nonfinite_constant)
+    try:
+        return json.loads(path.read_text(encoding='utf-8'),
+                          object_pairs_hook=reject_duplicate_keys,
+                          parse_constant=reject_nonfinite_constant)
+    except RecursionError as exc:
+        raise ValueError('Manifest JSON nesting exceeds decoder limit') from exc
 
 
 def main(argv=None):

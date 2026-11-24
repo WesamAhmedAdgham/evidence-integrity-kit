@@ -15,7 +15,7 @@ python evidence_integrity.py verify --root ./evidence --manifest manifest.json
 
 Run `create` on a trusted, stable evidence directory. Keep the resulting manifest in a separate trusted location. The command prints JSON and does not write into the evidence directory. `verify` checks the listed files and produces a JSON report. Exit codes: `0` success, `1` mismatch or inaccessible listed evidence, `2` invalid input or operational error.
 
-Manifest JSON must not contain duplicate object keys (including nested keys) or the non-standard constants `NaN`, `Infinity`, and `-Infinity`. These inputs are rejected with exit code `2` before evidence hashing. This validation does not authenticate the manifest.
+Manifest JSON must not contain duplicate object keys (including nested keys) or the non-standard constants `NaN`, `Infinity`, and `-Infinity`. These inputs are rejected with exit code `2` before evidence hashing. Excessive JSON nesting beyond the decoder limit is also rejected with exit code `2` rather than an unhandled traceback. This validation does not authenticate the manifest.
 
 ## Security model and limits
 
