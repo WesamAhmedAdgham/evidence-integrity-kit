@@ -190,7 +190,8 @@ class KeyLoadingTests(unittest.TestCase):
         plaintext = self.key.private_bytes(ser.Encoding.DER, ser.PrivateFormat.PKCS8,
                                            ser.NoEncryption())
         expected = self.key.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
-        for iterations, explicit_length, null in ((2048, False, True), (1000000, True, False)):
+        for iterations, explicit_length, null in ((2048, False, True), (600000, False, True),
+                                                   (1000000, True, False)):
             with self.subTest(iterations=iterations):
                 salt, iv = secrets.token_bytes(16), secrets.token_bytes(16)
                 k = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt,
