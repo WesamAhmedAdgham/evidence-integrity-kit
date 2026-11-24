@@ -38,7 +38,9 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Install hash-locked signing dependencies
         run: >-
-          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: -r requirements-signing.txt
+          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: --report signing-install-report.json -r requirements-signing.txt
+      - name: Verify installed wheel evidence and record crypto runtime
+        run: python tools/verify_signing_environment.py --report signing-install-report.json --lock requirements-signing.txt
       - name: Check signing dependency consistency
         run: python -m pip check
       - name: Run signed-manifest tests (required)
