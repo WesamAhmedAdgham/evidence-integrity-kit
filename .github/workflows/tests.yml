@@ -37,11 +37,27 @@ jobs:
         run: python --version
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
-      - name: Verify core has no signing capability or third-party dependency
-        run: python -S -m unittest discover -s tests -p test_unsigned_scope.py -v
+      - name: Install hash-locked signing dependencies
+        run: >-
+          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: --report signing-install-report.json -r requirements-signing.txt
+      - name: Verify installed wheel evidence and record crypto runtime
+        run: python tools/verify_signing_environment.py --report signing-install-report.json --lock requirements-signing.txt
+      - name: Check signing dependency consistency
+        run: python -m pip check
+      - name: Run signed-manifest tests (required)
+        run: python -m unittest discover -s tests_crypto -v
+      - name: Native synthetic Btrfs snapshot fixture (required on Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v mkfs.btrfs >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y btrfs-progs
+          fi
+          bash tools/test_linux_btrfs_snapshot.sh
 
   release-provider-policy:
     name: Signing provider release gate / ${{ matrix.os }} / Python ${{ matrix.python }}
+    if: (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -49,10 +65,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python: ['3.11', '3.13']
-    env:
-      PYTHONUTF8: '1'
-      PYTHONDONTWRITEBYTECODE: '1'
-      EIK_REQUIRE_NATIVE_FIXTURES: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -60,9 +72,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
-      - name: Require exact unsigned payload (provider not applicable only here)
-        run: python -B -S tools/check_unsigned_scope.py
-      - name: Verify fail-closed scope policy
-        run: python -B -S -m unittest discover -s tests -p test_unsigned_scope_gate.py -v
-      - name: Verify no signing CLI and no site packages
-        run: python -B -S -m unittest discover -s tests -p test_unsigned_scope.py -v
+      - name: Install hash-locked signing dependencies
+        run: >-
+          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: --report signing-install-report.json -r requirements-signing.txt
+      - name: Verify installed wheel evidence
+        run: python tools/verify_signing_environment.py --report signing-install-report.json --lock requirements-signing.txt
+      - name: Require reviewed signing provider
+        run: python tools/check_release_provider.py

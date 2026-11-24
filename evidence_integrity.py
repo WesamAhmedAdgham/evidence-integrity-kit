@@ -17,6 +17,9 @@ MAX_PATH_COMPONENTS = 128
 MAX_ENTRIES = 10000
 MAX_TOTAL_COMPONENTS = 32768
 MAX_TOTAL_PATH_CHARS = 262144
+# Each component can retain a separate native handle; leave headroom for
+# transient validation handles and the Windows CRT descriptor table.
+MAX_WINDOWS_GUARD_COMPONENTS = 256
 
 
 # Use a conservative portable subset of Windows and POSIX filenames.
@@ -311,7 +314,109 @@ def check_native_change(root, name, expected, root_fd, baseline):
         raise ValueError(f'Evidence changed before operation completion: {name!r}')
 
 
-def generate(root, names):
+def check_windows_guard_budget(names):
+    """Reject unsupported hosts or excessive retained handles before evidence I/O."""
+    if os.name != 'nt':
+        raise ValueError('Windows deny-write mode unavailable on this platform')
+    if sum(name.count('/') + 1 for name in names) > MAX_WINDOWS_GUARD_COMPONENTS:
+        raise ValueError('Windows deny-write retained handle budget exceeded')
+
+
+def check_guarded_evidence(root, name, expected, directories, stream, root_fd, native_state):
+    from windows_root import file_guard_state
+    revalidate_processed_file(root, name, expected, root_fd)
+    check_directory_chain(root, name, directories)
+    current = os.fstat(stream.fileno())
+    if (not current.st_ino or not os.path.samestat(expected, current) or
+            not stat.S_ISREG(current.st_mode) or current.st_nlink != 1 or
+            content_metadata_changed(expected, current) or
+            file_guard_state(stream) != native_state):
+        raise ValueError(f'Guarded evidence changed: {name!r}')
+
+
+def windows_guarded_digests(root, names):
+    """Acquire all listed read handles before hashing; no weaker fallback.
+
+    The common protected interval ends before the first handle is released.
+    This is ordinary Win32 share exclusion, not an immutable snapshot.
+    """
+    from windows_root import guarded_windows_file, pinned_windows_root, local_ntfs_scope, file_guard_state
+    acquired = []
+    identities = {}
+    results = []
+    with pinned_windows_root(root, deny_write=True) as root_fd, ExitStack() as stack:
+        volume_scope = local_ntfs_scope(root_fd[0])
+        for name in names:
+            directories = sample_directory_chain(root, name)
+            _, expected = evidence_path(root, name)
+            stream = stack.enter_context(guarded_windows_file(
+                root, validate_relative_path(name), root_fd, deny_write=True, volume_scope=volume_scope))
+            opened = os.fstat(stream.fileno())
+            if (not expected.st_ino or not opened.st_ino or
+                    not os.path.samestat(expected, opened) or
+                    not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or
+                    content_metadata_changed(expected, opened)):
+                raise ValueError(f'Guarded evidence identity or metadata changed: {name!r}')
+            register_identity(opened, name, identities)
+            native_state = file_guard_state(stream)
+            if native_state[0][0] != root_fd[1][0]:
+                raise ValueError(f'Guarded evidence native volume changed: {name!r}')
+            acquired.append((name, expected, directories, stream, native_state))
+        # Every listed leaf and guarded directory now excludes ordinary
+        # incompatible write/delete opens; metadata access is a separate issue.
+        # Check the whole cohort before consuming any evidence bytes.
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+            reader = SizedEvidenceReader(stream, expected.st_size)
+            value = hashlib.file_digest(reader, 'sha256').hexdigest()
+            if reader.remaining or not reader.eof_checked:
+                raise ValueError('Guarded evidence changed during hashing: incomplete read')
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+            results.append(value)
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+        check_root_identity(root, root_fd)
+    return results
+
+
+def check_protection_request(deny_write, snapshot_uuid):
+    if deny_write and snapshot_uuid is not None:
+        raise ValueError('Evidence protection modes are mutually exclusive')
+    if snapshot_uuid is not None:
+        from linux_snapshot import validate_request
+        return validate_request(snapshot_uuid)
+    return None
+
+
+def snapshot_digests(root, names, expected):
+    import linux_snapshot as provider
+    results = []
+    identities = {}
+    with pinned_root(root) as root_fd:
+        scope = provider.root_scope(root_fd, expected, root=root)
+        for name in names:
+            provider.check_root_scope(root_fd, scope)
+            check_root_identity(root, root_fd)
+            with provider.open_snapshot_leaf(root_fd, name, scope) as (stream, before):
+                register_identity(before, name, identities)
+                reader = SizedEvidenceReader(stream, before.st_size)
+                value = hashlib.file_digest(reader, 'sha256').hexdigest()
+                if reader.remaining or not reader.eof_checked:
+                    raise ValueError('Snapshot evidence incomplete read')
+                after = provider.check_file_scope(stream.fileno(), scope, native=True)
+                fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+                if (not os.path.samestat(before, after) or
+                        any(getattr(before, field) != getattr(after, field) for field in fields)):
+                    raise ValueError('Snapshot evidence changed while hashing')
+            results.append(value)
+        provider.check_root_scope(root_fd, scope)
+        check_root_identity(root, root_fd)
+    return results
+
+
+def generate(root, names, *, deny_write=False, snapshot_uuid=None):
     if not names:
         raise ValueError('A directory and unique file paths are required')
     check_path_budget(names)
@@ -320,9 +425,22 @@ def generate(root, names):
         check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
-    root = resolve_path(Path(root), strict=True)
+    snapshot = check_protection_request(deny_write, snapshot_uuid)
+    if deny_write:
+        check_windows_guard_budget(names)
+    if deny_write:
+        from windows_root import lexical_guarded_root
+        root = lexical_guarded_root(root)
+    else:
+        root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('A directory and unique file paths are required')
+    if deny_write or snapshot is not None:
+        ordered = sorted(names)
+        values = (windows_guarded_digests(root, ordered) if deny_write else
+                  snapshot_digests(root, ordered, snapshot))
+        return {'version': 1, 'algorithm': 'sha256', 'files': [
+            {'path': name, 'sha256': value} for name, value in zip(ordered, values)]}
     files = []
     processed = []
     identities = {}
@@ -377,11 +495,32 @@ def validate_manifest(manifest, *, strict=False):
     return validated
 
 
-def verify(root, manifest):
+def verify(root, manifest, *, deny_write=False, snapshot_uuid=None):
     validated = validate_manifest(manifest)
-    root = resolve_path(Path(root), strict=True)
+    snapshot = check_protection_request(deny_write, snapshot_uuid)
+    if deny_write:
+        check_windows_guard_budget(name for name, _ in validated)
+    if deny_write:
+        from windows_root import lexical_guarded_root
+        root = lexical_guarded_root(root)
+    else:
+        root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('Evidence root must be a directory')
+    if deny_write or snapshot is not None:
+        names = [name for name, _ in validated]
+        values = (windows_guarded_digests(root, names) if deny_write else
+                  snapshot_digests(root, names, snapshot))
+        results = [{'path': name, 'status': 'match' if value == expected else 'mismatch'}
+                   for (name, expected), value in zip(validated, values)]
+        if deny_write:
+            protection = {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles',
+                          'traversal': 'native-relative-from-drive-root'}
+        else:
+            protection = {'mode': 'linux-btrfs-snapshot', 'snapshot_uuid': str(snapshot),
+                          'scope': 'root-owned-read-only-subvolume', 'traversal': 'openat2-no-cross-mount'}
+        return {'ok': all(r['status'] == 'match' for r in results), 'files': results,
+                'protection': protection}
     results = []
     processed = []
     identities = {}
@@ -487,6 +626,38 @@ def decode_manifest(raw):
 def load_manifest(path):
     return decode_manifest(read_manifest_bytes(path))
 
+def sign_manifest_file(manifest_path, private_key_path):
+    from manifest_signatures import sign_manifest_bytes
+    from signing_keys import read_private_key
+
+    raw = read_manifest_bytes(manifest_path)
+    validate_manifest(decode_manifest(raw), strict=True)
+    key = read_private_key(private_key_path)
+    return sign_manifest_bytes(raw, key)
+
+
+def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_write=False, snapshot_uuid=None):
+    from manifest_signatures import MAX_SIGNATURE_FILE_BYTES, verify_manifest_signature
+    from signing_keys import read_public_key, public_key_fingerprint
+
+    raw = read_manifest_bytes(manifest_path)
+    signature = read_control_bytes(signature_path, limit=MAX_SIGNATURE_FILE_BYTES,
+                                   label='Signature')
+    key = read_public_key(public_key_path)
+    verify_manifest_signature(raw, signature, key)
+    manifest = decode_manifest(raw)
+    validate_manifest(manifest, strict=True)
+    fingerprint = public_key_fingerprint(key)
+    if deny_write or snapshot_uuid is not None:
+        result = verify(root, manifest, deny_write=deny_write, snapshot_uuid=snapshot_uuid)
+    else:
+        result = verify(root, manifest)
+    result['authentication'] = {
+        'protocol': 'evidence-integrity-kit-ed25519-v1',
+        'verified': True,
+        'public_key_sha256': fingerprint,
+    }
+    return result
 
 
 def main(argv=None):
@@ -498,14 +669,51 @@ def main(argv=None):
     check = commands.add_parser('verify', help='Compare evidence against a manifest')
     check.add_argument('--root', required=True, type=Path)
     check.add_argument('--manifest', required=True, type=Path)
+    sign = commands.add_parser('sign', help='Sign validated manifest bytes with an encrypted Ed25519 key')
+    sign.add_argument('--manifest', required=True, type=Path)
+    sign.add_argument('--private-key', required=True, type=Path)
+    signed = commands.add_parser('verify-signed', help='Authenticate a manifest before checking evidence')
+    signed.add_argument('--root', required=True, type=Path)
+    signed.add_argument('--manifest', required=True, type=Path)
+    signed.add_argument('--signature', required=True, type=Path)
+    signed.add_argument('--public-key', required=True, type=Path)
+    for command in (create, check, signed):
+        protection = command.add_mutually_exclusive_group(required=True)
+        protection.add_argument('--assume-stable-tree', action='store_true',
+                                help='Explicitly assert externally stable evidence; sampled checks only, no isolation proof')
+        protection.add_argument('--windows-deny-write', action='store_true',
+                                help='Hold all listed Windows file handles without write/delete sharing; fail closed')
+        protection.add_argument('--linux-btrfs-snapshot', metavar='UUID',
+                                help='Require trusted root-owned read-only Btrfs snapshot UUID; fail closed')
     args = parser.parse_args(argv)
     try:
         if args.command == 'create':
-            result = generate(args.root, args.files)
+            result = (generate(args.root, args.files, deny_write=args.windows_deny_write,
+                               snapshot_uuid=args.linux_btrfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                      generate(args.root, args.files))
             code = 0
-        else:
-            result = verify(args.root, load_manifest(args.manifest))
+        elif args.command == 'sign':
+            signature = sign_manifest_file(args.manifest, args.private_key)
+            print(signature.decode('ascii'), end='')
+            return 0
+        elif args.command == 'verify-signed':
+            result = (verify_signed(args.root, args.manifest, args.signature, args.public_key,
+                                    deny_write=args.windows_deny_write, snapshot_uuid=args.linux_btrfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                      verify_signed(args.root, args.manifest, args.signature, args.public_key))
             code = 0 if result['ok'] else 1
+        else:
+            manifest = load_manifest(args.manifest)
+            result = (verify(args.root, manifest, deny_write=args.windows_deny_write,
+                             snapshot_uuid=args.linux_btrfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                      verify(args.root, manifest))
+            code = 0 if result['ok'] else 1
+        if args.command in ('verify', 'verify-signed') and args.assume_stable_tree:
+            result['protection'] = {'mode': 'assumed-stable-tree',
+                                    'isolation_verified': False,
+                                    'scope': 'sampled-checks-only'}
         output = json.dumps(result, indent=2, ensure_ascii=True)
         # ASCII serialization; allow for CRLF translation on Windows, including the final newline.
         if args.command == 'create' and len(output) + output.count('\n') + 2 > MAX_MANIFEST_BYTES:
