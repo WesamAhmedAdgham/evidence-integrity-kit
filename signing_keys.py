@@ -12,6 +12,9 @@ from evidence_integrity import read_control_bytes
 from manifest_signatures import provider
 
 MAX_KEY_BYTES = 16 * 1024
+MAX_PASSPHRASE_BYTES = 1024
+# RFC 8410 Ed25519 SPKI: SEQUENCE(AlgorithmIdentifier(OID), BIT STRING).
+ED25519_SPKI_PREFIX = bytes.fromhex('302a300506032b6570032100')
 PUBLIC_LABEL = b'PUBLIC KEY'
 PRIVATE_LABEL = b'ENCRYPTED PRIVATE KEY'
 
@@ -49,6 +52,9 @@ def serialization_provider():
 
 def load_public_key(raw):
     der = pem_payload(raw, PUBLIC_LABEL)
+    # Admit only the fixed canonical RFC 8410 envelope before generic parsing.
+    if len(der) != len(ED25519_SPKI_PREFIX) + 32 or not der.startswith(ED25519_SPKI_PREFIX):
+        raise ValueError('Ed25519 public key required in canonical SPKI encoding')
     ed25519, serialization, unsupported = serialization_provider()
     try:
         key = serialization.load_der_public_key(der)
@@ -72,9 +78,16 @@ def public_key_fingerprint(key):
     return hashlib.sha256(raw).hexdigest()
 
 
-def _load_encrypted_private_der(der, password):
+def validate_passphrase(password):
     if type(password) is not bytes or not password:
         raise ValueError('Nonempty private key passphrase required')
+    if len(password) > MAX_PASSPHRASE_BYTES:
+        raise ValueError('Private key passphrase exceeds byte limit')
+    return password
+
+
+def _load_encrypted_private_der(der, password):
+    validate_passphrase(password)
     validate_encrypted_key_profile(der)
     ed25519, serialization, unsupported = serialization_provider()
     try:
@@ -107,7 +120,7 @@ def prompt_passphrase():
         # than pasted text. Never strip it or try an altered passphrase.
         if '\x16' in password:
             raise ValueError('Unexpected paste control character in passphrase; type it manually or use a terminal paste command that inserts text')
-        return password.encode('utf-8')
+        return validate_passphrase(password.encode('utf-8'))
     except (getpass.GetPassWarning, EOFError, OSError, UnicodeError, KeyboardInterrupt):
         raise ValueError('Secure private key passphrase input failed') from None
 
