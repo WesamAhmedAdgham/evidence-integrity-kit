@@ -4,7 +4,7 @@ A small, offline Python CLI for generating and verifying SHA-256 manifests for e
 
 ## Requirements
 
-Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; a hash-locked wheel allowlist is included, pending native verification and independent review.
+Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; a hash-locked wheel allowlist was verified in native CI at 2cd3fb3; independent review and release acceptance remain pending.
 
 ## Example
 
@@ -23,7 +23,7 @@ Verification validates the structure of every manifest entry (object type, path 
 
 Path names use a conservative cross-platform lexical policy: `/` separates nonempty components. Dot and parent components, trailing ASCII spaces/dots, Windows-reserved device names (including extensions), Windows-forbidden punctuation, ASCII control characters 0–31 and unpaired surrogate code points are rejected on every OS. Both create and verify validate the complete path list before evidence resolution or hashing. This intentionally rejects some previously accepted POSIX filenames; invalid lexical paths now produce exit code `2` instead of a per-file error in verify. Rename incompatible files before creating a new manifest; do not silently rewrite existing evidence paths. This is not a guarantee of portability: filesystem-specific limits, filesystem aliases (including hard links and short names), and concurrent changes remain outside this lexical check.
 
-Both create and verify also reject conflicting spellings of any listed path component under the same parent when they share a conservative Unicode comparison key (NFC, casefold, NFC). This includes directory prefixes, even when the leaf filenames differ. The original spelling is preserved; no path is automatically renamed. This policy can reject distinct files on case-sensitive filesystems and is not an exact model of any particular filesystem's case or normalization rules. It detects collisions among listed paths only, not all aliases or unlisted directory entries. Rejections occur before evidence file resolution or hashing (exit code `2`).
+Both create and verify also reject conflicting spellings of any listed path component under the same parent when they share a conservative Unicode comparison key (NFC, casefold, NFC). This includes directory prefixes, even when the leaf filenames differ. A listed file cannot also be an ancestor directory of another listed file (for example, `a` and `a/b`); both input orders are rejected. Complete structural preflight precedes evidence-root resolution, including for authenticated manifests. The original spelling is preserved; no path is automatically renamed. This policy can reject distinct files on case-sensitive filesystems and is not an exact model of any particular filesystem's case or normalization rules. It detects collisions among listed paths only, not all aliases or unlisted directory entries. Rejections occur before evidence file resolution or hashing (exit code `2`).
 
 Evidence files must report exactly one hard link (`st_nlink == 1`) at the time of the file check. A file with additional hard links is rejected, including aliases not listed in the manifest and aliases elsewhere on the same filesystem. An unavailable or zero link count is not accepted. This intentionally conservative rule rejects even legitimate multiply linked files: if appropriate, use independent copies in a trusted evidence directory rather than modifying originals. The affected file is not hashed; create exits `2`, while verify records a per-file error (exit `1`). Identical content in independent files remains supported. The rule depends on trustworthy filesystem metadata and is not a proof of origin, a general alias detector, or protection against concurrent link changes. It does not apply to the manifest file itself.
 
@@ -43,7 +43,7 @@ After the per-file checks, create revalidates every processed pathname and verif
 
 ## Experimental signed manifests
 
-The development candidate includes detached Ed25519 signing and explicit signed verification. These commands are pending final regression, hash-enforced installation verification and independent security review. Do not use this candidate for production evidence.
+The development candidate includes detached Ed25519 signing and explicit signed verification. These commands have native CI evidence, including hash-enforced wheel installation and POSIX and Windows terminal tests at 2cd3fb3; the follow-up candidate requires its own regression and independent security review. Do not use this candidate for production evidence.
 
 Install optional signing dependencies in a trusted environment from the reviewed dependency set. The candidate requirements-signing.txt pins exact versions and ten wheel hashes for the tested matrix. In a fresh virtual environment, use `python -m pip install --require-hashes --only-binary=:all: -r requirements-signing.txt`. Other architectures/wheel variants may be rejected. See [design](docs/security-and-signature-design.md) and [dependency notes](docs/signing-dependency-candidate.md).
 
@@ -68,6 +68,8 @@ Unsigned verification checks content against a supplied manifest without authent
 
 ```sh
 python -m unittest discover -s tests -v
+# After installing the hash-locked signing dependencies:
+python -m unittest discover -s tests_crypto -v
 ```
 
 ## Status
