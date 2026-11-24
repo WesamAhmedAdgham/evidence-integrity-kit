@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import re
+import stat
 import sys
 import unicodedata
 from pathlib import Path
@@ -46,7 +47,9 @@ def evidence_path(root, name):
     path = root
     for part in parts:
         path = path / part
-        if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
+        metadata = path.lstat()
+        if (stat.S_ISLNK(metadata.st_mode) or
+                getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError(f'Link not permitted: {name!r}')
     if not path.resolve().is_relative_to(root) or not path.is_file():
         raise ValueError(f'Not a regular evidence file: {name!r}')

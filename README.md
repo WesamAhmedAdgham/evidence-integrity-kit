@@ -4,7 +4,7 @@ A small, offline Python CLI for generating and verifying SHA-256 manifests for e
 
 ## Requirements
 
-Python 3.11 or later. Python 3.12 or later is recommended on Windows for junction detection.
+Python 3.11 or later.
 
 ## Example
 
@@ -29,7 +29,7 @@ Evidence files must report exactly one hard link (`st_nlink == 1`) at the time o
 
 ## Security model and limits
 
-This tool verifies content against a supplied manifest; it does not authenticate the manifest, prove authorship, establish chain of custody, or prove that the directory contains no additional files. It checks explicit relative paths and rejects traversal and detected symbolic links (and junctions on supported Python versions). It is not a sandbox and is not designed to withstand concurrent hostile filesystem changes. Use a trusted, stable local directory and keep manifests separate from untrusted evidence. Manifest paths may themselves be sensitive; inspect before sharing. Never publish actual client evidence or private manifests.
+This tool verifies content against a supplied manifest; it does not authenticate the manifest, prove authorship, establish chain of custody, or prove that the directory contains no additional files. It checks explicit relative paths and rejects traversal and symbolic links, junctions and other reparse points when exposed by `lstat()` on each listed path component below the resolved evidence root. Junction detection does not require `Path.is_junction()` (introduced in Python 3.12). Some Windows reparse types may be resolved by the operating system rather than exposed by `lstat()`; this is not a guarantee that all reparse points are detected. The explicitly supplied root is resolved before checking its descendants. It is not a sandbox and is not designed to withstand concurrent hostile filesystem changes. Use a trusted, stable local directory and keep manifests separate from untrusted evidence. Manifest paths may themselves be sensitive; inspect before sharing. Never publish actual client evidence or private manifests.
 
 ## Tests
 
