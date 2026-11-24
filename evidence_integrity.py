@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import sys
+import unicodedata
 from pathlib import Path
 
 HEX = re.compile(r'[0-9a-f]{64}')
@@ -29,6 +30,17 @@ def validate_relative_path(name):
     return parts
 
 
+def check_path_collisions(name, prefixes):
+    node = prefixes
+    for part in validate_relative_path(name):
+        normalized = unicodedata.normalize('NFC', part)
+        key = unicodedata.normalize('NFC', normalized.casefold())
+        previous, children = node.setdefault(key, (part, {}))
+        if previous != part:
+            raise ValueError(f'Portable path collision in {name!r}: {previous!r} and {part!r}')
+        node = children
+
+
 def evidence_path(root, name):
     parts = validate_relative_path(name)
     path = root
@@ -50,8 +62,9 @@ def generate(root, names):
     root = Path(root).resolve(strict=True)
     if not root.is_dir() or not names:
         raise ValueError('A directory and unique file paths are required')
+    prefixes = {}
     for name in names:
-        validate_relative_path(name)
+        check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
     return {'version': 1, 'algorithm': 'sha256', 'files': [
@@ -69,13 +82,14 @@ def verify(root, manifest):
     if not isinstance(entries, list) or not entries:
         raise ValueError('Manifest must contain at least one file')
     seen = set()
+    prefixes = {}
     # Validate every entry before touching any evidence file.
     validated = []
     for item in entries:
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not isinstance(item.get('sha256'), str) or not HEX.fullmatch(item['sha256']):
             raise ValueError('Invalid manifest entry')
         name = item['path']
-        validate_relative_path(name)
+        check_path_collisions(name, prefixes)
         if name in seen:
             raise ValueError(f'Duplicate path: {name!r}')
         seen.add(name)
