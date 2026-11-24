@@ -381,17 +381,23 @@ def windows_guarded_digests(root, names):
     return results
 
 
-def check_protection_request(deny_write, snapshot_uuid):
-    if deny_write and snapshot_uuid is not None:
+def check_protection_request(deny_write, snapshot_uuid, apfs_source=None):
+    if sum((bool(deny_write), snapshot_uuid is not None, apfs_source is not None)) > 1:
         raise ValueError('Evidence protection modes are mutually exclusive')
     if snapshot_uuid is not None:
         from linux_snapshot import validate_request
         return validate_request(snapshot_uuid)
+    if apfs_source is not None:
+        from macos_snapshot import validate_request
+        return validate_request(apfs_source)
     return None
 
 
-def snapshot_digests(root, names, expected):
-    import linux_snapshot as provider
+def snapshot_digests(root, names, expected, *, apfs=False):
+    if apfs:
+        import macos_snapshot as provider
+    else:
+        import linux_snapshot as provider
     results = []
     identities = {}
     with pinned_root(root) as root_fd:
@@ -416,7 +422,7 @@ def snapshot_digests(root, names, expected):
     return results
 
 
-def generate(root, names, *, deny_write=False, snapshot_uuid=None):
+def generate(root, names, *, deny_write=False, snapshot_uuid=None, apfs_source=None):
     if not names:
         raise ValueError('A directory and unique file paths are required')
     check_path_budget(names)
@@ -425,7 +431,7 @@ def generate(root, names, *, deny_write=False, snapshot_uuid=None):
         check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
-    snapshot = check_protection_request(deny_write, snapshot_uuid)
+    snapshot = check_protection_request(deny_write, snapshot_uuid, apfs_source)
     if deny_write:
         check_windows_guard_budget(names)
     if deny_write:
@@ -438,7 +444,7 @@ def generate(root, names, *, deny_write=False, snapshot_uuid=None):
     if deny_write or snapshot is not None:
         ordered = sorted(names)
         values = (windows_guarded_digests(root, ordered) if deny_write else
-                  snapshot_digests(root, ordered, snapshot))
+                  snapshot_digests(root, ordered, snapshot, apfs=apfs_source is not None))
         return {'version': 1, 'algorithm': 'sha256', 'files': [
             {'path': name, 'sha256': value} for name, value in zip(ordered, values)]}
     files = []
@@ -495,9 +501,9 @@ def validate_manifest(manifest, *, strict=False):
     return validated
 
 
-def verify(root, manifest, *, deny_write=False, snapshot_uuid=None):
+def verify(root, manifest, *, deny_write=False, snapshot_uuid=None, apfs_source=None):
     validated = validate_manifest(manifest)
-    snapshot = check_protection_request(deny_write, snapshot_uuid)
+    snapshot = check_protection_request(deny_write, snapshot_uuid, apfs_source)
     if deny_write:
         check_windows_guard_budget(name for name, _ in validated)
     if deny_write:
@@ -510,12 +516,16 @@ def verify(root, manifest, *, deny_write=False, snapshot_uuid=None):
     if deny_write or snapshot is not None:
         names = [name for name, _ in validated]
         values = (windows_guarded_digests(root, names) if deny_write else
-                  snapshot_digests(root, names, snapshot))
+                  snapshot_digests(root, names, snapshot, apfs=apfs_source is not None))
         results = [{'path': name, 'status': 'match' if value == expected else 'mismatch'}
                    for (name, expected), value in zip(validated, values)]
         if deny_write:
             protection = {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles',
                           'traversal': 'native-relative-from-drive-root'}
+        elif apfs_source is not None:
+            protection = {'mode': 'macos-apfs-snapshot', 'snapshot_source': snapshot,
+                          'scope': 'root-mounted-local-read-only-nodev-apfs-snapshot',
+                          'traversal': 'descriptor-relative-scope-checked'}
         else:
             protection = {'mode': 'linux-btrfs-snapshot', 'snapshot_uuid': str(snapshot),
                           'scope': 'root-owned-read-only-subvolume', 'traversal': 'openat2-no-cross-mount'}
@@ -636,7 +646,7 @@ def sign_manifest_file(manifest_path, private_key_path):
     return sign_manifest_bytes(raw, key)
 
 
-def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_write=False, snapshot_uuid=None):
+def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_write=False, snapshot_uuid=None, apfs_source=None):
     from manifest_signatures import MAX_SIGNATURE_FILE_BYTES, verify_manifest_signature
     from signing_keys import read_public_key, public_key_fingerprint
 
@@ -648,8 +658,8 @@ def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_
     manifest = decode_manifest(raw)
     validate_manifest(manifest, strict=True)
     fingerprint = public_key_fingerprint(key)
-    if deny_write or snapshot_uuid is not None:
-        result = verify(root, manifest, deny_write=deny_write, snapshot_uuid=snapshot_uuid)
+    if deny_write or snapshot_uuid is not None or apfs_source is not None:
+        result = verify(root, manifest, deny_write=deny_write, snapshot_uuid=snapshot_uuid, apfs_source=apfs_source)
     else:
         result = verify(root, manifest)
     result['authentication'] = {
@@ -685,12 +695,14 @@ def main(argv=None):
                                 help='Hold all listed Windows file handles without write/delete sharing; fail closed')
         protection.add_argument('--linux-btrfs-snapshot', metavar='UUID',
                                 help='Require trusted root-owned read-only Btrfs snapshot UUID; fail closed')
+        protection.add_argument('--macos-apfs-snapshot', metavar='SOURCE',
+                                help='Require trusted mounted APFS snapshot source; fail closed')
     args = parser.parse_args(argv)
     try:
         if args.command == 'create':
             result = (generate(args.root, args.files, deny_write=args.windows_deny_write,
-                               snapshot_uuid=args.linux_btrfs_snapshot)
-                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                               snapshot_uuid=args.linux_btrfs_snapshot, apfs_source=args.macos_apfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None or args.macos_apfs_snapshot is not None else
                       generate(args.root, args.files))
             code = 0
         elif args.command == 'sign':
@@ -699,15 +711,15 @@ def main(argv=None):
             return 0
         elif args.command == 'verify-signed':
             result = (verify_signed(args.root, args.manifest, args.signature, args.public_key,
-                                    deny_write=args.windows_deny_write, snapshot_uuid=args.linux_btrfs_snapshot)
-                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                                    deny_write=args.windows_deny_write, snapshot_uuid=args.linux_btrfs_snapshot, apfs_source=args.macos_apfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None or args.macos_apfs_snapshot is not None else
                       verify_signed(args.root, args.manifest, args.signature, args.public_key))
             code = 0 if result['ok'] else 1
         else:
             manifest = load_manifest(args.manifest)
             result = (verify(args.root, manifest, deny_write=args.windows_deny_write,
-                             snapshot_uuid=args.linux_btrfs_snapshot)
-                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None else
+                             snapshot_uuid=args.linux_btrfs_snapshot, apfs_source=args.macos_apfs_snapshot)
+                      if args.windows_deny_write or args.linux_btrfs_snapshot is not None or args.macos_apfs_snapshot is not None else
                       verify(args.root, manifest))
             code = 0 if result['ok'] else 1
         if args.command in ('verify', 'verify-signed') and args.assume_stable_tree:
