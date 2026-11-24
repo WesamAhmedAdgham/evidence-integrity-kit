@@ -52,16 +52,20 @@ def evidence_path(root, name):
         if (stat.S_ISLNK(metadata.st_mode) or
                 getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
             raise ValueError(f'Link not permitted: {name!r}')
-    if not path.resolve().is_relative_to(root) or not path.is_file():
+    if not path.resolve().is_relative_to(root) or not stat.S_ISREG(metadata.st_mode):
         raise ValueError(f'Not a regular evidence file: {name!r}')
-    if path.stat().st_nlink != 1:
+    if metadata.st_nlink != 1:
         raise ValueError(f'Evidence file must have exactly one hard link: {name!r}')
-    return path
+    return path, metadata
 
 
-def digest(path):
+def digest(path, expected):
     with path.open('rb') as stream:
         before = os.fstat(stream.fileno())
+        if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
+            raise ValueError(f'Evidence identity changed or unavailable: {path.name!r}')
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise ValueError(f'Opened evidence is not a regular single-link file: {path.name!r}')
         result = hashlib.file_digest(stream, 'sha256').hexdigest()
         after = os.fstat(stream.fileno())
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
@@ -80,7 +84,7 @@ def generate(root, names):
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
     return {'version': 1, 'algorithm': 'sha256', 'files': [
-        {'path': name, 'sha256': digest(evidence_path(root, name))}
+        {'path': name, 'sha256': digest(*evidence_path(root, name))}
         for name in sorted(names)]}
 
 
@@ -109,7 +113,7 @@ def verify(root, manifest):
     results = []
     for name, expected_digest in validated:
         try:
-            status = 'match' if digest(evidence_path(root, name)) == expected_digest else 'mismatch'
+            status = 'match' if digest(*evidence_path(root, name)) == expected_digest else 'mismatch'
         except (OSError, ValueError) as exc:
             results.append({'path': name, 'status': 'error', 'detail': str(exc)})
         else:
