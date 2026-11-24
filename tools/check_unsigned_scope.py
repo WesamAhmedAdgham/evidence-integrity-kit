@@ -8,11 +8,12 @@ import json
 import subprocess
 import sys
 
-# Git blob IDs of the unsigned extraction c5f6acb (runtime and regressions).
+# Git blob IDs of the proposed unsigned-only JSON budget update to c5f6acb.
+# Exact scope pinning is not independent review or merge authorization.
 EXPECTED_BLOBS = {
     ".gitignore": "98dbeb43997e0d3f65ee193a2f0f895debc6a1f6",
     "LICENSE": "f48ae1e496f52c718e4baea15028b15ef67171ac",
-    "evidence_integrity.py": "8bf8de45dca8484678dc269fceee1d1f5d47fea3",
+    "evidence_integrity.py": "26a852049e4be432cc0da2530c0e95321c7e3fbb",
     "tests/native_fixture_support.py": "d23a2547371088d9674ecdd846e874880139ff17",
     "tests/test_audit_remediation.py": "218c157990272dee872129aedec1ebf6dd4d5c19",
     "tests/test_bounded_evidence.py": "1e25cdab681ea92e947c1ef962c4f7a9e483a381",
@@ -27,6 +28,7 @@ EXPECTED_BLOBS = {
     "tests/test_manifest_foundation.py": "04b9a1ae1bbc73cab461b50e7175a65e4f4c4f6e",
     "tests/test_manifest_io.py": "00f302071c37a496eb31dbd3118f07a40096d45c",
     "tests/test_manifest_json.py": "bebe0abf99553bcdfea881dcd4000cc56f2134ea",
+    "tests/test_json_structure_budget.py": "7b13a4b0a6488af41a676d30d12b584eec9c544c",
     "tests/test_manifest_open.py": "8cbbb7bb1fff539fa1cc40e8a959b0a0fee3053d",
     "tests/test_manifest_preflight.py": "05f393c894a1b2cfc319b0c6197dc27e1bc41c78",
     "tests/test_manifest_stability.py": "0b52d99eb411dcba2d2b1bb36bdd4039b9278324",
