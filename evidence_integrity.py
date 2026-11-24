@@ -59,7 +59,7 @@ def evidence_path(root, name):
     return path, metadata
 
 
-def digest(path, expected):
+def digest(path, expected, *, root, name):
     with path.open('rb') as stream:
         before = os.fstat(stream.fileno())
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
@@ -71,6 +71,9 @@ def digest(path, expected):
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
         if any(getattr(before, field) != getattr(after, field) for field in fields):
             raise ValueError(f'Evidence changed during hashing: {path.name!r}')
+        _, current = evidence_path(root, name)
+        if not current.st_ino or not os.path.samestat(after, current):
+            raise ValueError(f'Evidence path changed during hashing: {name!r}')
         return result
 
 
@@ -84,7 +87,7 @@ def generate(root, names):
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
     return {'version': 1, 'algorithm': 'sha256', 'files': [
-        {'path': name, 'sha256': digest(*evidence_path(root, name))}
+        {'path': name, 'sha256': digest(*evidence_path(root, name), root=root, name=name)}
         for name in sorted(names)]}
 
 
@@ -113,7 +116,7 @@ def verify(root, manifest):
     results = []
     for name, expected_digest in validated:
         try:
-            status = 'match' if digest(*evidence_path(root, name)) == expected_digest else 'mismatch'
+            status = 'match' if digest(*evidence_path(root, name), root=root, name=name) == expected_digest else 'mismatch'
         except (OSError, ValueError) as exc:
             results.append({'path': name, 'status': 'error', 'detail': str(exc)})
         else:
