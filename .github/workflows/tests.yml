@@ -54,9 +54,6 @@ jobs:
             sudo apt-get install -y btrfs-progs
           fi
           bash tools/test_linux_btrfs_snapshot.sh
-      - name: Native synthetic APFS snapshot fixture (required on macOS)
-        if: runner.os == 'macOS'
-        run: bash tools/test_macos_apfs_snapshot.sh
 
   release-provider-policy:
     name: Signing provider release gate / ${{ matrix.os }} / Python ${{ matrix.python }}

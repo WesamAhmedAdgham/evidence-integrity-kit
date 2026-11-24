@@ -68,11 +68,9 @@ On Linux x86-64, an operator may supply a trusted, externally provisioned, root-
 
 The operator must trust snapshot provenance, root-owned provisioning, kernel, procfs, storage and mount namespace. Privileged actors, idmapped mounts and namespace manipulation outside that trust boundary are not covered. A UUID is an identifier, not a cryptographic attestation. Only Linux x86-64 is targeted by this provider. Native synthetic fixture validation is required before relying on this mode.
 
-## Experimental macOS APFS snapshot mode
+## macOS scope for this candidate
 
-On macOS arm64, use `--macos-apfs-snapshot SOURCE` with create, verify or verify-signed, where SOURCE is an independently obtained exact native mount-source identifier (for example `snapshot-name@/dev/diskXsY`, using the actual device identifier). Run without root privileges; supply the root of a trusted administrator-mounted local APFS snapshot. The native fstatfs flags must include MNT_SNAPSHOT, MNT_RDONLY, MNT_LOCAL and MNT_NODEV; mount owner must be root. The held root, each opened directory and each leaf must match the descriptor filesystem/mount scope. The tool does not create snapshots or mount volumes; generic read-only APFS volumes are rejected. No fallback.
-
-The source is a host-local identifier, not a persistent UUID or cryptographic attestation; trust the operator's independent snapshot provenance, mount namespace, kernel and storage. As in Btrfs mode the manifest/signature formats are unchanged. Both snapshot modes require native positive/negative fixture verification. No support is claimed for other filesystem providers.
+macOS supports explicit `--assume-stable-tree` only: external evidence isolation is an operator prerequisite and is not verified by the CLI. Native APFS snapshot support is **not shipped** in this candidate. Its code and mandatory positive/negative native tests are preserved separately; the hosted macOS fixture could not create a snapshot because of permission denial. Ordinary read-only mounts are not claimed to be immutable snapshots. Unsupported APFS options are rejected, not silently mapped to sampled mode.
 
 ## Experimental signed manifests
 

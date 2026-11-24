@@ -38,7 +38,7 @@ PR #21 was merged with all twelve required checks passing for the pinned unsigne
 
 Native APFS setup at 5cb4d35 failed before snapshot creation: hdiutil rejected `-format UDRW` without a source. Use the documented blank-image `-type UDIF` option; native positive and negative fixture remains mandatory. Verify the actual subsequent logs before claiming remediation.
 
-## Native APFS capability blocker
+## Historical native APFS capability blocker (deferred feature)
 
 Exact run 45321827535 at ab73511934fac0a50df9dd86a9b7e278a9533076: both Darwin SDK ABI probes, blank APFS image creation, attach and synthetic population succeeded. Both native positive fixtures stopped at fs_snapshot_create with EPERM, despite sudo. The Darwin fs_snapshot_create(2) manual requires superuser privileges and an additional entitlement. This is a native fixture capability blocker; it is not proof that the APFS provider works or that EPERM alone identifies the exact missing entitlement. Do not disable SIP or security policy, use system-volume snapshots, or skip this positive requirement.
 
@@ -53,6 +53,10 @@ Guarded mode no longer resolves the supplied root through junctions before acqui
 ## Explicit CLI assurance selection
 
 The candidate requires exactly one protection option for create, verify and verify-signed. An explicit --assume-stable-tree assertion selects compatibility sampling; its CLI report states isolation_verified=false. Absence or conflicting modes fails at argument parsing before control or evidence reads. This prevents accidental omission of the protection flag, not deliberate selection of an inappropriate mode. Native requests retain fail-closed behavior, and manifest/signature formats and the legacy Python API remain unchanged. Existing CLI tests explicitly select the stable-tree mode where appropriate; native tests retain native flags. Require exact-head verification and owner review.
+
+## Release scope split — 2026-11-24
+
+The native APFS feature is removed from the proposed first signed release, not marked as verified. Its complete implementation, source, native fixture and tests are preserved at 1d35d485b85aad4accdfda1ca86fa683a3039e77 and in the separate APFS development branch. The signed candidate exposes only explicit sampled/external-isolation, Windows local NTFS guarded and Linux Btrfs snapshot modes. macOS remains supported for sampled checks against externally isolated evidence, not native snapshot capability. The release scope test checks absent APFS runtime/fixture files and rejection of its former flag before control/evidence I/O. The mandatory APFS positive and negative fixture remains in the deferred feature branch and must pass before reintroduction. The six functional contexts, Windows and Linux native fixtures, and all six full cryptographic provider contexts remain mandatory. This is a scope reduction, not a security acceptance or a permission workaround. Owner's residual risk rejection, independent review, operational isolation and provider acceptance remain open.
 
 ## Historical baseline and cumulative review
 
