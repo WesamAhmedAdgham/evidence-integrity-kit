@@ -167,3 +167,48 @@ class KeyLoadingTests(unittest.TestCase):
                     keys.read_private_key(path)
                 self.assertNotIn(phrase, str(error.exception))
                 unlock.assert_not_called()
+
+
+    def test_real_provider_roundtrip_at_profile_iteration_boundaries(self):
+        # Independent test-only DER encoder and standard provider primitives.
+        # No production encryption or key-generation API is introduced.
+        from cryptography.hazmat.primitives import hashes, padding
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+
+        def tlv(tag, value):
+            n = len(value)
+            raw = n.to_bytes(max(1, (n.bit_length()+7)//8), 'big')
+            return bytes([tag]) + (bytes([n]) if n < 128 else bytes([128|len(raw)])+raw) + value
+
+        def seq(*values):
+            return tlv(0x30, b''.join(values))
+
+        def oid(value):
+            return tlv(6, bytes.fromhex(value))
+
+        plaintext = self.key.private_bytes(ser.Encoding.DER, ser.PrivateFormat.PKCS8,
+                                           ser.NoEncryption())
+        expected = self.key.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw)
+        for iterations, explicit_length, null in ((2048, False, True), (1000000, True, False)):
+            with self.subTest(iterations=iterations):
+                salt, iv = secrets.token_bytes(16), secrets.token_bytes(16)
+                k = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt,
+                              iterations=iterations).derive(self.password)
+                padder = padding.PKCS7(128).padder()
+                padded = padder.update(plaintext) + padder.finalize()
+                encryptor = Cipher(algorithms.AES(k), modes.CBC(iv)).encryptor()
+                ciphertext = encryptor.update(padded) + encryptor.finalize()
+                count = iterations.to_bytes((iterations.bit_length()+8)//8, 'big')
+                pbkdf = seq(tlv(4, salt), tlv(2, count),
+                            b'\x02\x01\x20' if explicit_length else b'',
+                            seq(oid('2a864886f70d0209'), b'\x05\x00' if null else b''))
+                params = seq(seq(oid('2a864886f70d01050c'), pbkdf),
+                             seq(oid('60864801650304012a'), tlv(4, iv)))
+                der = seq(seq(oid('2a864886f70d01050d'), params), tlv(4, ciphertext))
+                pem = b'-----BEGIN ENCRYPTED PRIVATE KEY-----\n' + base64.b64encode(der) + b'\n-----END ENCRYPTED PRIVATE KEY-----\n'
+                loaded = keys.load_private_key(pem, self.password)
+                self.assertEqual(loaded.public_key().public_bytes(ser.Encoding.Raw,
+                                                                ser.PublicFormat.Raw), expected)
+                sig.verify_manifest_signature(b'{}', sig.sign_manifest_bytes(b'{}', loaded),
+                                              keys.load_public_key(self.public))

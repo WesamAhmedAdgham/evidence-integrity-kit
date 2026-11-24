@@ -607,12 +607,49 @@ def read_manifest_bytes(path):
     return read_control_bytes(path, limit=MAX_MANIFEST_BYTES, label='Manifest')
 
 
+MAX_JSON_STRUCTURE = 65536
+MAX_JSON_DEPTH = 64
+
+
+def check_json_structure_budget(raw):
+    """Bound structural tokens before decoding; not a replacement JSON parser."""
+    inside = escaped = False
+    depth = structure = 0
+    for byte in raw:
+        if inside:
+            if escaped:
+                escaped = False
+            elif byte == 92:  # backslash
+                escaped = True
+            elif byte == 34:  # quote
+                inside = False
+            continue
+        if byte == 34:
+            inside = True
+        elif byte in (123, 91):  # object / array open
+            depth += 1
+            structure += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError('Manifest JSON nesting exceeds decoder limit (nesting budget exceeded)')
+        elif byte in (125, 93):  # object / array close
+            depth -= 1
+            if depth < 0:
+                raise ValueError('Unbalanced manifest JSON structure')
+        elif byte in (44, 58):  # comma / colon
+            structure += 1
+        if structure > MAX_JSON_STRUCTURE:
+            raise ValueError('Manifest JSON structure budget exceeded')
+    if inside or depth:
+        raise ValueError('Incomplete manifest JSON structure')
+
+
 def decode_manifest(raw):
     """Parse only the supplied immutable bytes; never reopen a pathname."""
     if not isinstance(raw, bytes):
         raise ValueError('Manifest input must be bytes')
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
+    check_json_structure_budget(raw)
     try:
         return json.loads(raw.decode('utf-8'),
                           object_pairs_hook=reject_duplicate_keys,
