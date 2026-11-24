@@ -81,3 +81,8 @@ Other wheel variants are deliberately not allowed.
 ## Proposed point-validator dependency — not approved
 
 PyNaCl 1.6.2, three pinned wheel hashes verified by byte hashing in PR #25 run 45464785795, with 72 evaluation/integration methods passed in run 45466885008. Upstream reports the bundled libsodium fix for CVE-2025-69277; independent publisher and patch provenance, review of current advisories and the final integration matrix remain required. This draft adds PyNaCl to the signing lock but does not approve it. OpenSSL 4.0.3 is still blocked. The point-validator release allowlist is empty.
+
+
+## 2026-11-24 release qualification checkpoint
+
+OpenSSL published four additional advisories on 2026-11-24 affecting 4.0.3 and listing fixes for 4.0.4: CVE-2026-84785 and CVE-2026-107494 (QUIC), CVE-2026-121482 (X.509 CRL processing), CVE-2026-84786 (DANE). See https://openssl-library.org/news/timeline/ and https://openssl-library.org/news/vulnerabilities-4.0/. These protocol/certificate paths are not used by the intended offline manifest CLI; this is a preliminary reachability assessment, not proof of non-applicability or approval of the binary. The official release timeline and PyPI https://pypi.org/project/cryptography/ still show OpenSSL 4.0.3 on the pinned cryptography 50.0.2 wheels; do not infer that a listed fix target is a published wheel. Retain the release block and both empty allowlists. Require independent advisory applicability, patch provenance and exact artifact review before approval.

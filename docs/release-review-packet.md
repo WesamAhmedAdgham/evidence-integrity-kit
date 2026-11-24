@@ -1,51 +1,41 @@
-# Release review packet — independent review required
+# Cumulative release qualification — independent review required
 
-Implementation baseline: `0a59fe012198e10666bb2cbcaf3f71852829a1d5` (PR #23).
-Review the final exact commit, including any subsequent changes; this packet does not approve it.
-This packet is an implementation-side review, not independent approval.
-The release candidate is the exact head of this draft PR, not main.
+This is an author-side AI-assisted review packet, not independent approval.
+Baseline main: `5f1c01439e3d65a635a164507e92fcf8f68a695f`.
+Last functional baseline: `dde5594422a478b643ad4c5fc548f34ac736e38f`; tree `47a8f17d0707890077613d88b36115559560ee20`.
+Review the exact latest head of PR #26, including this packet revision, against main.
+The baseline has 101 commits ahead, zero behind, 44 changed files. APFS is deferred to #22; experimental #25 infrastructure is excluded.
 
-## Evidence and reproducibility
+## Reproducible evidence
 
-- Compare cumulatively against main `5f1c01439e3d65a635a164507e92fcf8f68a695f`.
-- Review every production module, native adapter, security design, dependency lock, CI workflow and test suite.
-- Previous PR #23 baseline `c31002d8dea2bb960bd473ec05d4e2071cd8d951`: run 45390037499, six functional jobs, 1,346 passes, 214 platform skips, zero failures; tested merge tree matched candidate tree. Provider gate skipped, not approval.
-- F07 baseline `0a59fe012198e10666bb2cbcaf3f71852829a1d5`: run 45421134451, five completed native jobs each with 218 standard and 51 crypto methods; 1,170 passes, 175 platform skips, zero test failures in completed jobs. macOS 3.13 cancelled; retry requested. Do not count the unfinished job or credit the new candidate with these historical results.
-- PR #20 run 45323053884: all six provider-policy jobs failed. Require provider approval, exact final tree and full native matrix; no automatic release.
-- In a fresh venv install using pip --require-hashes --only-binary=:all:
-  -r requirements-signing.txt, run python -m pip check, then run
-  python -m unittest discover -s tests -v and
-  python -m unittest discover -s tests_crypto -v.
-- Review the baseline native Windows console and POSIX PTY tests and rerun
-  them on the final candidate. Mocked input is not evidence of real echo suppression.
-- Verify PyPI artifact hashes/provenance against source records and current
-  advisories; do not assume successful installation proves supply-chain safety.
+| Stage | Run | Observed outcome |
+| --- | --- | --- |
+| PKCS#8 bounds and key format | 45390037499 | 1,346 passes, 214 skips, 0 failures |
+| JSON resource bounds | 45421134451 | 1,400 passes, 214 skips, 0 failures after cancelled macOS retry |
+| KDF provisioning | 45430965467 | 1,400 passes, 214 skips, 0 failures after macOS retries |
+| Isolated validator | 45464785795 | 30 evaluation methods passed, 24 artifact digest checks; 13 distinct artifacts |
+| Test-hook integration | 45466885008 | 72 evaluation methods passed, zero skips/failures |
+| Direct runtime baseline | 45467589147 | 1,460 passes, 214 skips, 0 failures, six native jobs; 219 standard + 60 crypto methods each |
 
-## Review priorities and open limitations
+All six last-baseline functional job logs checked out merge `67c1c9e5dc1ccde7997361c007abcbc8e676c425`, identical tree to baseline. All 54 direct point-admission executions passed; native Btrfs positive/negative fixtures passed on both Linux runners. Platform skips are not native coverage on other platforms. Provider gate skipped on stacked PR; not approval. Retargeting #26 to main alone did not create a fresh workflow run at the observed checkpoint; this documentation revision is intended to trigger the full direct-main matrix. No result for the revised head is claimed.
 
-1. Authentication: exact bytes, domain separator, canonical encoding, key
-   type, strict schema, no fallback or filesystem access before authentication,
-   exit codes, public-key trust and replay semantics.
-2. Key handling: encrypted DER parser, resource-intensive KDF parameters,
-   prompt behavior, errors and secret lifetime. Keys must be trusted local
-   inputs; the strict outer KDF profile bounds admitted parameters, not total process resources. Review F02 public-key validity, F03 stronger provisioning policy versus legacy compatibility, and actual Windows console and POSIX PTY evidence.
-3. Filesystem: POSIX directory moves after open, mount changes, Windows
-   sampled-mode absolute path limitations, guarded native relative traversal, reparse mutations, special files, inode
-   reuse, metadata collisions, path aliases, root ancestors, control-input
-   races and multi-file consistency. Current checks are sampled mitigations;
-   not comprehensive protection against a hostile mutable filesystem.
-4. Snapshot prerequisite: externally trusted immutable snapshot or effective
-   write/namespace exclusion is needed for point-in-time evidence. Guarded Windows and Btrfs modes enforce specific tested controls, not comprehensive isolation across arbitrary environments. Owner and independent reviewer must
-   explicitly accept the bounded threat model or require further implementation.
-5. Dependencies: ten exact hashes, no source builds, install fresh, review
-   PyPI provenance, upstream versions and bundled OpenSSL, optional provider
-   absence, no implicit upgrade.
-6. CI and packaging: check all native logs and explained skips; validate
-   unsigned compatibility, help/exit codes, no secrets, MIT license.
+## Review disposition checklist
 
-Record findings with ID, severity, exact commit, source location, reproduction,
-impact, remediation, and independent retest result. An independent reviewer
-must assess the final fixed commit and explicitly record residual risks.
-The author cannot approve their own implementation as independent.
-Do not mark audit, comprehensive TOCTOU protection, or release acceptance
-complete solely because tests pass. No merge until owner gates are met.
+| Area | Evidence available | Required independent disposition |
+| --- | --- | --- |
+| F01 / dependencies | Locked cryptography 50.0.2 / OpenSSL 4.0.3; PyNaCl 1.6.2 | Review current advisories, all artifact provenance and bundled binary identity; both approval allowlists empty |
+| F02 / Ed25519 | Canonical SPKI, maintained point validation, fail-closed direct tests | Review subgroup semantics, provider errors, trusted key model and exact wheel provenance |
+| F03 / KDF | Bounded outer DER profile, passphrase limit, 600,000 iteration roundtrip | Independent parser differential review; decide legacy import vs stronger provisioning policy |
+| F04–F06 / filesystem | Sampled mode, Windows NTFS guarded mode and Linux Btrfs snapshot native tests | Owner acceptance of residual TOCTOU and isolation requirements; no comprehensive guarantee |
+| F07 / JSON | Structural and byte budgets, native regression | Review parser and compatibility, process-wide resource limitations |
+| F08–F09 / control inputs | Sampled stable reads and terminal passphrase tests | Review trusted control storage, races and secret lifetime |
+| F10 / provenance | Hash locks, actual wheel digest and installation evidence | Verify publisher attestations separately; hash matching is not publisher trust |
+| F11 / documentation | Updated design and README | Check exact final code/docs consistency |
+| F12 / protocol scope | Explicit signature, trust and replay boundaries | Accept limits on completeness, freshness and legal provenance |
+| F13 / independence | Implementation-side evidence only | Independent reviewer signs off on exact final fixed head |
+
+## Execution and acceptance
+
+In a fresh venv install with `python -m pip install --require-hashes --only-binary=:all: -r requirements-signing.txt`, then `python -m pip check`, `python -m unittest discover -s tests -v`, and `python -m unittest discover -s tests_crypto -v`. Inspect actual native terminal and filesystem fixture results, not just green job summaries. Use synthetic inputs only. Review complete cumulative diff, production modules, CI workflows, lock, licenses and threat model. Verify exact tree identity of CI checkout and all final changes.
+
+Record each finding ID, severity, exact commit, source, reproduction, impact, fix, independent retest and disposition. Explicitly distinguish author-side functional tests, independent audit, dependency approval and owner release authorization. No merge, tag or production release until all required gates are met. No provider allowlist entry merely on version or CI success.
