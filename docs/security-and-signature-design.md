@@ -37,11 +37,11 @@ mutation are residual risks, not accepted as solved by passing unit tests.
 
 | Threat | Current or proposed control | Remaining constraint |
 | --- | --- | --- |
-| Malformed manifest or ambiguous JSON | Bounded read, duplicate-key rejection, structural preflight | Does not bound all CPU, memory or filesystem latency |
-| Path traversal and aliases | Portable lexical policy, collision checks, lstat, single-link rule | Not an exhaustive filesystem alias detector |
+| Malformed manifest or ambiguous JSON | Bounded exact-size read, duplicate-key and non-finite number rejection, structural preflight | Does not bound all CPU, memory or filesystem latency |
+| Path traversal and aliases | Portable lexical policy, collision checks, lstat, single-link and distinct sampled identity rules | Not an exhaustive filesystem alias detector |
 | POSIX substituted links and root | Descriptor-relative no-follow opening, persistent root, sampled identity | Ancestors above resolved root, mount and directory moves remain possible |
 | Windows substituted links and root | Native directory/leaf guards, no delete sharing, reparse and identity checks | Not NT RootDirectory-relative traversal; reparse changes between samples remain possible |
-| File changes during read | Sampled identity and metadata checks | Same-size, reverted or metadata-indistinguishable changes may evade detection |
+| File changes during read | Sampled identity and metadata checks, size-bounded hashing and EOF probe | Same-size, reverted or metadata-indistinguishable changes may evade detection |
 | Earlier file changes during a batch | Final pathname metadata revalidation | Sequential checks are not an atomic snapshot |
 | Manifest forgery or alteration | Detached Ed25519 signature | Requires a genuinely trusted public key |
 | Signature stripping / downgrade | Separate fail-closed signed-verification command | Caller must enforce signed mode; unsigned mode does not authenticate |
@@ -146,7 +146,7 @@ evidence during signing or before all entries pass validation.
 Refactor the existing bounded manifest read into a reusable bytes reader and
 a separate strict JSON decoder. Preserve identity/stability checks and
 existing regression cases. Signature and key files also need bounded binary
-reads, regular-file checks and sampled identity/stability checks. Use trusted
+reads, regular-file checks, sampled identity/stability checks and exact agreement between sampled size and returned byte count. Use trusted
 locations for all control inputs; the public key is a trust anchor, not
 adversary-selected data. Do not claim special-file protection beyond actual
 native tests. Do not read a substituted manifest again after signature
