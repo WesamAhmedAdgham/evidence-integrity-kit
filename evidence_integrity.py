@@ -59,8 +59,15 @@ def evidence_path(root, name):
     return path, metadata
 
 
+def open_evidence(path):
+    if os.name == 'posix':
+        # A substituted FIFO must not block before descriptor validation.
+        return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
+    return path.open('rb')
+
+
 def digest(path, expected, *, root, name):
-    with path.open('rb') as stream:
+    with open_evidence(path) as stream:
         before = os.fstat(stream.fileno())
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
             raise ValueError(f'Evidence identity changed or unavailable: {path.name!r}')

@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from evidence_integrity import generate, verify
+from evidence_integrity import generate, open_evidence, verify
 
 
 class FileIdentityTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class FileIdentityTests(unittest.TestCase):
         self.replacement = self.root / 'replacement.txt'
         self.replacement.write_bytes(b'synthetic')
         self.assertFalse(self.path.samefile(self.replacement))
-        self.real_open = Path.open
+        self.real_open = open_evidence
 
     def swap_at_open(self, path, *args, **kwargs):
         if path == self.path:
@@ -27,7 +27,7 @@ class FileIdentityTests(unittest.TestCase):
         return self.real_open(path, *args, **kwargs)
 
     def test_create_rejects_replacement_before_hashing(self):
-        with patch.object(Path, 'open', lambda path, *a, **kw: self.swap_at_open(path, *a, **kw)), \
+        with patch('evidence_integrity.open_evidence', side_effect=self.swap_at_open), \
                 patch('evidence_integrity.hashlib.file_digest', wraps=hashlib.file_digest) as digest:
             with self.assertRaisesRegex(ValueError, 'Evidence identity changed'):
                 generate(self.root, ['a.txt'])
@@ -36,7 +36,7 @@ class FileIdentityTests(unittest.TestCase):
 
     def test_verify_rejects_replacement_even_with_identical_content(self):
         manifest = generate(self.root, ['a.txt'])
-        with patch.object(Path, 'open', lambda path, *a, **kw: self.swap_at_open(path, *a, **kw)), \
+        with patch('evidence_integrity.open_evidence', side_effect=self.swap_at_open), \
                 patch('evidence_integrity.hashlib.file_digest', wraps=hashlib.file_digest) as digest:
             report = verify(self.root, manifest)
             digest.assert_not_called()
