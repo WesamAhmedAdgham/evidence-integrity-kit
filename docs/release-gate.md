@@ -28,6 +28,10 @@ At `7e15309348bfb27c29c9ad886fd2848fabe3ebca`, the owner demonstrated with synth
 
 The owner did not accept the existing partial TOCTOU protection. EIK-R05/EIKA-02 remain open. The opt-in Windows deny-write mode is a bounded first implementation step: all listed file handles exclude ordinary write/delete sharing before hashing begins, same-handle native ChangeTime checks, retained descendant directory guards, whole-operation failure without weaker fallback, and a 256-component retained-handle budget. Native subprocess probes cover existing incompatible writers, writes and renames during hashing/final revalidation, and release on success/error. Require exact-head CI before crediting any results. The follow-up restricts guarded mode to a single local NTFS volume using handle-derived volume GUIDs, excludes ordinary conflicting directory write opens, and checks native leaf identity and attributes on the held handle. Native writable mapping, directory-write and volume scope regressions require exact-head CI. Guarded descendant opens now use actual NT RootDirectory-relative single-component opens with native no-follow type checks and relative edge revalidation; exact-head native CI required. Root acquisition and sampled pathname validation are still absolute. This does not provide a verified immutable namespace, POSIX enforcement, protection beyond the common handle interval, or comprehensive TOCTOU resistance. Further design and owner review required.
 
+## Experimental Linux snapshot integration
+
+The Linux x86-64 Btrfs candidate checks a trusted externally supplied snapshot UUID, actual root-owned read-only subvolume and descriptor-derived scope, strict openat2 traversal and same-object reads. Native synthetic fixture must verify ordinary writer denial, live-source mutation isolation, read-only bind mount rejection and mount crossing. No implicit privileged snapshot creation in the application. macOS APFS integration and independent acceptance remain open. Require exact-head CI and do not claim comprehensive TOCTOU closure.
+
 ## Historical baseline and cumulative review
 
 - Published main: 60654e8265650bf74626198ddd9692acddf8071e.
