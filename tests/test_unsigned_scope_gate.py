@@ -23,7 +23,8 @@ class ScopeGateTests(unittest.TestCase):
                 gate.check_scope(dict(self.index(), **{name: '0' * 40}))
 
     def test_changed_runtime_or_regression_rejected(self):
-        for name in ('evidence_integrity.py', 'windows_root.py', 'tests/test_audit_remediation.py'):
+        for name in ('evidence_integrity.py', 'windows_root.py', 'tests/test_audit_remediation.py',
+                     'tests/test_json_structure_budget.py'):
             entries = self.index()
             entries[name] = '0' * 40
             with self.subTest(name=name), self.assertRaises(ValueError):
