@@ -356,7 +356,9 @@ def validate_manifest(manifest, *, strict=False):
     if len(entries) > MAX_ENTRIES:
         raise ValueError('Evidence path budget exceeded')
     # Validate types before the aggregate budget; no trie allocated yet.
-    check_path_budget(item.get('path') if isinstance(item, dict) else None for item in entries)
+    if any(not isinstance(item, dict) or not isinstance(item.get('path'), str) for item in entries):
+        raise ValueError('Invalid manifest entry')
+    check_path_budget(item['path'] for item in entries)
     seen = set()
     prefixes = {}
     # Validate every entry before touching any evidence file.
