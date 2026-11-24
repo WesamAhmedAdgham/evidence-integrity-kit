@@ -58,5 +58,19 @@ class PosixOpenIdentityTests(unittest.TestCase):
         self.assertTrue(kit.verify(self.root, kit.generate(self.root, [self.name]))['ok'])
 
 
+class PathDepthTests(unittest.TestCase):
+    def test_portable_depth_limit_before_io(self):
+        accepted = '/'.join(['a'] * kit.MAX_PATH_COMPONENTS)
+        self.assertEqual(len(kit.validate_relative_path(accepted)), kit.MAX_PATH_COMPONENTS)
+        rejected = accepted + '/a'
+        manifest = {'version': 1, 'algorithm': 'sha256', 'files': [
+            {'path': rejected, 'sha256': 'a' * 64}]}
+        for operation, arg in ((kit.generate, [rejected]), (kit.verify, manifest)):
+            with patch.object(kit, 'resolve_path') as resolve:
+                with self.assertRaisesRegex(ValueError, 'component limit'):
+                    operation(Path('unused'), arg)
+                resolve.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
