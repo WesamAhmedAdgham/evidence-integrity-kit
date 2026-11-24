@@ -1,6 +1,6 @@
 # Release review packet — independent review required
 
-Baseline: verified signed CLI at 41b174c6c47a0100ee2e764ca26fd20ae497f744.
+Baseline: verified release-hardening candidate at 2cd3fb319e8ddc3989510c667ee4b60ea12c3a71.
 This packet is an implementation-side review, not independent approval.
 The release candidate is the exact head of this draft PR, not main.
 
@@ -9,16 +9,19 @@ The release candidate is the exact head of this draft PR, not main.
 - Read the cumulative diff from main 60654e8265650bf74626198ddd9692acddf8071e.
 - Review the four production modules, security-and-signature-design.md,
   dependency allowlist and all tests. Inspect source, not only PR summaries.
-- Prior baseline: 162 defined tests, 1736 passed, 208 platform-specific skips,
-  zero failures across 12 jobs (45307799453 and 45307806168).
-- New candidate: 171 defined methods (129 standard, 42 crypto including two
-  POSIX PTY methods). Actual candidate CI remains pending.
+- Verified baseline: 173 defined methods (129 standard, 44 crypto), 1844 passes,
+  232 explained platform-specific skips, zero failures across 12 jobs
+  (45308478164 and 45308486875). Hash-locked installation, pip check, POSIX PTY
+  and real Windows console tests passed. See PR #17 for exact evidence.
+- Follow-up candidate adds file/directory conflict preflight, root resolution
+  error handling and eight regression methods (135 standard, 46 crypto).
+  Its own exact-head CI and review are required; baseline counts do not prove it.
 - In a fresh venv install using pip --require-hashes --only-binary=:all:
   -r requirements-signing.txt, run python -m pip check, then run
   python -m unittest discover -s tests -v and
   python -m unittest discover -s tests_crypto -v.
-- Native Windows real console validation remains required; mocked input and
-  POSIX PTY are not evidence of Windows console echo suppression.
+- Review the baseline native Windows console and POSIX PTY tests and rerun
+  them on the final candidate. Mocked input is not evidence of real echo suppression.
 - Verify PyPI artifact hashes/provenance against source records and current
   advisories; do not assume successful installation proves supply-chain safety.
 
@@ -29,7 +32,7 @@ The release candidate is the exact head of this draft PR, not main.
    exit codes, public-key trust and replay semantics.
 2. Key handling: encrypted DER parser, resource-intensive KDF parameters,
    prompt behavior, errors and secret lifetime. Keys must be trusted local
-   inputs; 16 KiB does not bound KDF CPU/memory. Check Windows real console.
+   inputs; 16 KiB does not bound KDF CPU/memory. Review actual Windows console and POSIX PTY evidence.
 3. Filesystem: POSIX directory moves after open, mount changes, Windows
    absolute-path guard limitations, reparse mutations, special files, inode
    reuse, metadata collisions, path aliases, root ancestors, control-input
