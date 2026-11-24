@@ -4,7 +4,7 @@ A small, offline Python CLI for generating and verifying SHA-256 manifests for e
 
 ## Requirements
 
-Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; final hash-locked dependency review is pending.
+Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; a hash-locked wheel allowlist is included, pending native verification and independent review.
 
 ## Example
 
@@ -43,9 +43,9 @@ After the per-file checks, create revalidates every processed pathname and verif
 
 ## Experimental signed manifests
 
-The development candidate includes detached Ed25519 signing and explicit signed verification. These commands are pending full regression, dependency hash locking and independent security review. Do not use this candidate for production evidence.
+The development candidate includes detached Ed25519 signing and explicit signed verification. These commands are pending final regression, hash-enforced installation verification and independent security review. Do not use this candidate for production evidence.
 
-Install optional signing dependencies in a trusted environment from the reviewed dependency set. The current candidate version pins are in requirements-signing.txt; final wheel hash locking is pending. See [design](docs/security-and-signature-design.md) and [dependency notes](docs/signing-dependency-candidate.md).
+Install optional signing dependencies in a trusted environment from the reviewed dependency set. The candidate requirements-signing.txt pins exact versions and ten wheel hashes for the tested matrix. In a fresh virtual environment, use `python -m pip install --require-hashes --only-binary=:all: -r requirements-signing.txt`. Other architectures/wheel variants may be rejected. See [design](docs/security-and-signature-design.md) and [dependency notes](docs/signing-dependency-candidate.md).
 
 Use an independently obtained Ed25519 SPKI public key and an encrypted PKCS#8 private key. Keep keys, manifest and signature outside the evidence root in trusted storage. Signing requires an interactive terminal for the non-echoing passphrase; passwords are not accepted as CLI arguments or environment variables.
 

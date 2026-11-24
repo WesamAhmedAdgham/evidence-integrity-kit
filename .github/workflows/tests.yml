@@ -36,10 +36,10 @@ jobs:
         run: python --version
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
-      - name: Install pinned candidate signing dependencies
+      - name: Install hash-locked signing dependencies
         run: >-
-          python -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: -r requirements-signing.txt
+          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: -r requirements-signing.txt
       - name: Check signing dependency consistency
         run: python -m pip check
-      - name: Run Ed25519 primitive tests (required)
+      - name: Run signed-manifest tests (required)
         run: python -m unittest discover -s tests_crypto -v
