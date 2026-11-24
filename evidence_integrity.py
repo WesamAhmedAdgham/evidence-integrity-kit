@@ -14,6 +14,9 @@ from pathlib import Path
 HEX = re.compile(r'[0-9a-f]{64}')
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_PATH_COMPONENTS = 128
+MAX_ENTRIES = 10000
+MAX_TOTAL_COMPONENTS = 32768
+MAX_TOTAL_PATH_CHARS = 262144
 
 
 # Use a conservative portable subset of Windows and POSIX filenames.
@@ -275,9 +278,43 @@ def revalidate_processed_file(root, name, expected, root_fd):
         raise ValueError(f'Evidence changed before operation completion: {name!r}')
 
 
+def check_path_budget(names):
+    """Bound aggregate trie and report growth before filesystem access."""
+    count = components = chars = 0
+    for name in names:
+        if not isinstance(name, str):
+            raise ValueError('Invalid relative path')
+        count += 1
+        components += name.count('/') + 1
+        chars += len(name)
+        if (count > MAX_ENTRIES or components > MAX_TOTAL_COMPONENTS or
+                chars > MAX_TOTAL_PATH_CHARS):
+            raise ValueError('Evidence path budget exceeded')
+
+
+def sample_native_change(root, name, expected, root_fd):
+    if os.name != 'nt':
+        return None
+    from windows_root import guarded_windows_file, file_change_time
+    # Native no-reparse opening; do not rely on Windows st_ctime.
+    with guarded_windows_file(root, validate_relative_path(name), root_fd) as stream:
+        opened = os.fstat(stream.fileno())
+        if (not opened.st_ino or not os.path.samestat(expected, opened) or
+                not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or
+                content_metadata_changed(expected, opened)):
+            raise ValueError(f'Evidence changed before operation completion: {name!r}')
+        return file_change_time(stream)
+
+
+def check_native_change(root, name, expected, root_fd, baseline):
+    if sample_native_change(root, name, expected, root_fd) != baseline:
+        raise ValueError(f'Evidence changed before operation completion: {name!r}')
+
+
 def generate(root, names):
     if not names:
         raise ValueError('A directory and unique file paths are required')
+    check_path_budget(names)
     prefixes = {}
     for name in names:
         check_path_collisions(name, prefixes)
@@ -295,13 +332,15 @@ def generate(root, names):
             directories = sample_directory_chain(root, name)
             path, expected = evidence_path(root, name)
             register_identity(expected, name, identities)
+            native_change = sample_native_change(root, name, expected, root_fd)
             value = digest(path, expected, root=root, name=name, root_fd=root_fd)
             check_directory_chain(root, name, directories)
             files.append({'path': name, 'sha256': value})
-            processed.append((name, expected, directories))
-        for name, expected, directories in processed:
+            processed.append((name, expected, directories, native_change))
+        for name, expected, directories, native_change in processed:
             revalidate_processed_file(root, name, expected, root_fd)
             check_directory_chain(root, name, directories)
+            check_native_change(root, name, expected, root_fd, native_change)
     return {'version': 1, 'algorithm': 'sha256', 'files': files}
 
 
@@ -314,6 +353,10 @@ def validate_manifest(manifest, *, strict=False):
     entries = manifest.get('files')
     if not isinstance(entries, list) or not entries:
         raise ValueError('Manifest must contain at least one file')
+    if len(entries) > MAX_ENTRIES:
+        raise ValueError('Evidence path budget exceeded')
+    # Validate types before the aggregate budget; no trie allocated yet.
+    check_path_budget(item.get('path') if isinstance(item, dict) else None for item in entries)
     seen = set()
     prefixes = {}
     # Validate every entry before touching any evidence file.
@@ -347,6 +390,7 @@ def verify(root, manifest):
                 directories = sample_directory_chain(root, name)
                 path, expected = evidence_path(root, name)
                 register_identity(expected, name, identities)
+                native_change = sample_native_change(root, name, expected, root_fd)
                 value = digest(path, expected, root=root, name=name, root_fd=root_fd)
                 check_directory_chain(root, name, directories)
                 status = 'match' if value == expected_digest else 'mismatch'
@@ -354,12 +398,13 @@ def verify(root, manifest):
                 results.append({'path': name, 'status': 'error', 'detail': str(exc)})
             else:
                 if status == 'match':
-                    processed.append((len(results), name, expected, directories))
+                    processed.append((len(results), name, expected, directories, native_change))
                 results.append({'path': name, 'status': status})
-        for index, name, expected, directories in processed:
+        for index, name, expected, directories, native_change in processed:
             try:
                 revalidate_processed_file(root, name, expected, root_fd)
                 check_directory_chain(root, name, directories)
+                check_native_change(root, name, expected, root_fd, native_change)
             except (OSError, ValueError) as exc:
                 results[index] = {'path': name, 'status': 'error', 'detail': str(exc)}
     return {'ok': all(r['status'] == 'match' for r in results), 'files': results}
