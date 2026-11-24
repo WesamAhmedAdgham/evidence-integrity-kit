@@ -62,7 +62,13 @@ This mode conservatively requires a local NTFS volume GUID on the actual root, d
 
 On Linux x86-64, an operator may supply a trusted, externally provisioned, root-owned read-only Btrfs snapshot root and its independently obtained canonical UUID. Use `--linux-btrfs-snapshot UUID` with create, verify or verify-signed. The CLI must run unprivileged. It checks the native subvolume read-only flag (not merely a read-only mount), snapshot and parent UUID, generation, device and descriptor mount identity. It uses openat2 with no symlink, magic-link or mount crossings; validates a held O_PATH regular single-link object before opening it via trusted procfs; checks actual file subvolume identity and root scope before/during/after the batch. No automatic provisioning or weaker fallback. The manifest/signature wire formats are unchanged.
 
-The operator must trust snapshot provenance, root-owned provisioning, kernel, procfs, storage and mount namespace. Privileged actors, idmapped mounts and namespace manipulation outside that trust boundary are not covered. A UUID is an identifier, not a cryptographic attestation. Only Linux x86-64 is targeted; macOS APFS and other providers remain unimplemented. Native synthetic fixture validation is required before relying on this mode.
+The operator must trust snapshot provenance, root-owned provisioning, kernel, procfs, storage and mount namespace. Privileged actors, idmapped mounts and namespace manipulation outside that trust boundary are not covered. A UUID is an identifier, not a cryptographic attestation. Only Linux x86-64 is targeted by this provider. Native synthetic fixture validation is required before relying on this mode.
+
+## Experimental macOS APFS snapshot mode
+
+On macOS arm64, use `--macos-apfs-snapshot SOURCE` with create, verify or verify-signed, where SOURCE is an independently obtained exact native mount-source identifier (for example `snapshot-name@/dev/diskXsY`, using the actual device identifier). Run without root privileges; supply the root of a trusted administrator-mounted local APFS snapshot. The native fstatfs flags must include MNT_SNAPSHOT, MNT_RDONLY, MNT_LOCAL and MNT_NODEV; mount owner must be root. The held root, each opened directory and each leaf must match the descriptor filesystem/mount scope. The tool does not create snapshots or mount volumes; generic read-only APFS volumes are rejected. No fallback.
+
+The source is a host-local identifier, not a persistent UUID or cryptographic attestation; trust the operator's independent snapshot provenance, mount namespace, kernel and storage. As in Btrfs mode the manifest/signature formats are unchanged. Both snapshot modes require native positive/negative fixture verification. No support is claimed for other filesystem providers.
 
 ## Experimental signed manifests
 

@@ -30,7 +30,7 @@ The owner did not accept the existing partial TOCTOU protection. EIK-R05/EIKA-02
 
 ## Experimental Linux snapshot integration
 
-The Linux x86-64 Btrfs candidate checks a trusted externally supplied snapshot UUID, actual root-owned read-only subvolume and descriptor-derived scope, strict openat2 traversal and same-object reads. Native synthetic fixture must verify ordinary writer denial, live-source mutation isolation, read-only bind mount rejection and mount crossing. No implicit privileged snapshot creation in the application. macOS APFS integration and independent acceptance remain open. Require exact-head CI and do not claim comprehensive TOCTOU closure.
+The Linux x86-64 Btrfs candidate checks a trusted externally supplied snapshot UUID, actual root-owned read-only subvolume and descriptor-derived scope, strict openat2 traversal and same-object reads. Native synthetic fixture must verify ordinary writer denial, live-source mutation isolation, read-only bind mount rejection and mount crossing. No implicit privileged snapshot creation in the application. The macOS arm64 APFS candidate adds native descriptor statfs checks for snapshot/read-only/local/nodev flags, root mount owner, expected source, exact mounted root and matching descendant scope. Both providers require actual signed CLI fixture tests; macOS SDK ABI and synthetic APFS positive/negative fixture must pass. Independent acceptance remains open. Require exact-head CI and do not claim comprehensive TOCTOU closure.
 
 ## Historical baseline and cumulative review
 

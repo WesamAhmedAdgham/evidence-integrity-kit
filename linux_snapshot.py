@@ -71,7 +71,7 @@ def subvolume_info(fd):
     return tree_id, generation, snapshot, parent
 
 
-def root_scope(fd, expected):
+def root_scope(fd, expected, *, root=None):
     import fcntl
     metadata = os.fstat(fd)
     if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_ino != 256 or metadata.st_uid != 0):

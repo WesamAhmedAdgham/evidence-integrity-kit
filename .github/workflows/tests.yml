@@ -37,14 +37,6 @@ jobs:
         run: python --version
       - name: Run regression tests
         run: python -m unittest discover -s tests -v
-      - name: Native synthetic Btrfs snapshot fixture (required on Linux)
-        if: runner.os == 'Linux'
-        run: |
-          if ! command -v mkfs.btrfs >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y btrfs-progs
-          fi
-          bash tools/test_linux_btrfs_snapshot.sh
       - name: Install hash-locked signing dependencies
         run: >-
           python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: --report signing-install-report.json -r requirements-signing.txt
@@ -54,6 +46,17 @@ jobs:
         run: python -m pip check
       - name: Run signed-manifest tests (required)
         run: python -m unittest discover -s tests_crypto -v
+      - name: Native synthetic Btrfs snapshot fixture (required on Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if ! command -v mkfs.btrfs >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y btrfs-progs
+          fi
+          bash tools/test_linux_btrfs_snapshot.sh
+      - name: Native synthetic APFS snapshot fixture (required on macOS)
+        if: runner.os == 'macOS'
+        run: bash tools/test_macos_apfs_snapshot.sh
 
   release-provider-policy:
     name: Signing provider release gate / ${{ matrix.os }} / Python ${{ matrix.python }}

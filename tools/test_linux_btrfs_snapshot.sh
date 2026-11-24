@@ -30,5 +30,6 @@ other="$(sudo btrfs subvolume show "$mnt/mutable" | awk '$1=="UUID:"{print $2}')
 sudo mount --bind "$mnt/mutable" "$robind"
 sudo mount -o remount,bind,ro "$robind"
 python tools/check_btrfs_fixture.py "$mnt/snapshot" "$mnt/source" "$robind" "$expected" "$other"
+python tools/check_snapshot_signed.py --linux-btrfs-snapshot "$expected" "$mnt/snapshot"
 sudo mount --bind "$mnt/source/nested" "$mnt/snapshot/nested"
 python tools/check_btrfs_fixture.py --mount-crossing "$mnt/snapshot" "$expected"
