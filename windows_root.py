@@ -2,7 +2,9 @@
 import ctypes
 import msvcrt
 import os
+import re
 import uuid
+from pathlib import Path
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 
@@ -97,7 +99,7 @@ class IoStatusBlock(ctypes.Structure):
     _fields_ = [('StatusOrPointer', ctypes.c_void_p), ('Information', ctypes.c_size_t)]
 
 
-def relative_handle(parent, part, *, directory):
+def relative_handle(parent, part, *, directory, deny_write=True):
     """Open exactly one validated component relative to a held directory.
 
     No absolute path fallback. A type-neutral no-follow open is checked
@@ -106,6 +108,8 @@ def relative_handle(parent, part, *, directory):
     from evidence_integrity import validate_relative_path
     if validate_relative_path(part) != [part]:
         raise ValueError('Native relative open requires exactly one component')
+    if not directory and not deny_write:
+        raise ValueError('Native relative leaf must deny write sharing')
     directory_identity(parent)
     encoded = part.encode('utf-16-le')
     if len(encoded) > 510:
@@ -131,8 +135,9 @@ def relative_handle(parent, part, *, directory):
     create.restype = wintypes.LONG
     convert.argtypes, convert.restype = [wintypes.LONG], wintypes.ULONG
     access = (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES if directory else GENERIC_READ) | SYNCHRONIZE
+    share = FILE_SHARE_READ if deny_write else FILE_SHARE_READ | FILE_SHARE_WRITE
     status = create(ctypes.byref(out), access, ctypes.byref(attrs), ctypes.byref(ios),
-                    None, 0, FILE_SHARE_READ, NT_FILE_OPEN,
+                    None, 0, share, NT_FILE_OPEN,
                     FILE_SYNCHRONOUS_IO_NONALERT | NT_FILE_OPEN_REPARSE_POINT, None, 0)
     if status != 0:
         if status > 0 and out.value not in (None, INVALID_HANDLE_VALUE):
@@ -153,8 +158,8 @@ def relative_handle(parent, part, *, directory):
 
 
 @contextmanager
-def relative_directory(parent, part):
-    handle = relative_handle(parent, part, directory=True)
+def relative_directory(parent, part, *, deny_write=True):
+    handle = relative_handle(parent, part, directory=True, deny_write=deny_write)
     try:
         yield handle
     finally:
@@ -190,8 +195,8 @@ def relative_leaf(parent, part):
         yield stream
 
 
-def local_ntfs_scope(handle):
-    """Conservatively require a local NTFS volume GUID on the actual handle."""
+def local_ntfs_location(handle):
+    """Return local NTFS GUID and handle-derived path within that volume."""
     fs = ctypes.create_unicode_buffer(32)
     if not _volume_info(handle, None, 0, None, None, None, fs, len(fs)):
         raise ctypes.WinError(ctypes.get_last_error())
@@ -209,21 +214,25 @@ def local_ntfs_scope(handle):
     name = path.value
     if not name.casefold().startswith(prefix.casefold()):
         raise ValueError('Windows deny-write mode requires a local volume GUID')
-    guid, separator, _ = name[len(prefix):].partition('}\\')
+    guid, separator, suffix = name[len(prefix):].partition('}\\')
     if not separator:
         raise ValueError('Windows guarded volume GUID unavailable')
     try:
-        return uuid.UUID(guid)
+        return uuid.UUID(guid), suffix
     except ValueError:
         raise ValueError('Windows guarded volume GUID invalid') from None
 
 
+def local_ntfs_scope(handle):
+    return local_ntfs_location(handle)[0]
+
+
 @contextmanager
-def directory_handle(path, *, deny_write=False):
+def directory_handle(path, *, deny_write=False, synchronize=False):
     # Request directory listing access, not just attributes, so the handle
     # participates in sharing checks. Deliberately omit FILE_SHARE_DELETE.
     share = FILE_SHARE_READ if deny_write else FILE_SHARE_READ | FILE_SHARE_WRITE
-    access = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | (SYNCHRONIZE if deny_write else 0)
+    access = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | (SYNCHRONIZE if deny_write or synchronize else 0)
     handle = _create(os.fspath(path), access,
                      share, None, OPEN_EXISTING,
                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
@@ -281,8 +290,78 @@ def check_windows_root(root, guard):
             raise ValueError('Evidence root identity changed or unavailable')
 
 
+def lexical_guarded_root(root):
+    """Bound a drive-letter path without following junctions or symlinks."""
+    from evidence_integrity import validate_relative_path, MAX_PATH_COMPONENTS
+    path = Path(root)
+    if '..' in path.parts or (path.drive and not path.is_absolute()) or (path.root and not path.drive):
+        raise ValueError('Windows guarded root must use an unambiguous local drive path')
+    path = Path(os.path.abspath(path))
+    if not re.fullmatch(r'[A-Za-z]:\\', path.anchor):
+        raise ValueError('Windows guarded root requires a local drive-letter anchor')
+    parts = path.parts[1:]
+    if not parts or len(parts) > MAX_PATH_COMPONENTS:
+        raise ValueError('Windows guarded root depth unavailable or exceeds limit')
+    for part in parts:
+        if validate_relative_path(part) != [part]:
+            raise ValueError('Invalid Windows guarded root component')
+    return path
+
+
+@contextmanager
+def pinned_relative_root(root):
+    """Pin drive-root and ancestors without denying unrelated ancestor writes.
+
+    The evidence root itself denies writes. No descendant of the drive
+    anchor is acquired by an absolute path. Root pathname checks supplement
+    relative identity checks; drive mapping and privileged metadata changes
+    are still outside the trusted namespace model.
+    """
+    root = lexical_guarded_root(root)
+    parts = root.parts[1:]
+    with ExitStack() as stack:
+        anchor = stack.enter_context(directory_handle(root.anchor, synchronize=True))
+        anchor_identity = directory_identity(anchor)
+        volume, suffix = local_ntfs_location(anchor)
+        if suffix:
+            raise ValueError('Windows guarded drive anchor is not a volume root')
+        parent = anchor
+        chain = []
+        for index, part in enumerate(parts):
+            deny = index == len(parts) - 1
+            child = stack.enter_context(relative_directory(parent, part, deny_write=deny))
+            if local_ntfs_scope(child) != volume:
+                raise ValueError('Guarded evidence root crosses local NTFS volume')
+            chain.append((parent, part, child, directory_identity(child), deny))
+            parent = child
+        guard = parent, chain[-1][3]
+
+        def recheck():
+            if directory_identity(anchor) != anchor_identity or local_ntfs_location(anchor) != (volume, ''):
+                raise ValueError('Windows guarded drive anchor changed')
+            # Confirm the currently named drive still resolves to the same root.
+            with directory_handle(root.anchor) as current:
+                if directory_identity(current) != anchor_identity or local_ntfs_location(current) != (volume, ''):
+                    raise ValueError('Windows guarded drive mapping changed')
+            for ancestor, part, child, identity, deny in chain:
+                if directory_identity(child) != identity:
+                    raise ValueError('Windows guarded root ancestor changed')
+                with relative_directory(ancestor, part, deny_write=deny) as current:
+                    if directory_identity(current) != identity:
+                        raise ValueError('Windows guarded root ancestor edge changed')
+            check_windows_root(root, guard)
+
+        recheck()
+        yield guard
+        recheck()
+
+
 @contextmanager
 def pinned_windows_root(root, *, deny_write=False):
+    if deny_write:
+        with pinned_relative_root(root) as guard:
+            yield guard
+        return
     expected = root.lstat()
     context = directory_handle(root, deny_write=True) if deny_write else directory_handle(root)
     with context as handle:

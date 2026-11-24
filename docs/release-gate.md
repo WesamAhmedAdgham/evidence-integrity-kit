@@ -46,6 +46,10 @@ The next fixture revision exercises ordinary live and read-only APFS volume reje
 
 Reference: https://man.freebsd.org/cgi/man.cgi?query=fs_snapshot_create&sektion=2&manpath=macOS+26.7
 
+## Guarded Windows root acquisition follow-up
+
+Guarded mode no longer resolves the supplied root through junctions before acquisition. The candidate restricts the root to a bounded ordinary local drive-letter path, checks the actual anchor is a volume root, retains each ancestor via single-component native relative opens, and omits delete sharing throughout. Ancestors allow ordinary writes; the final evidence root denies writes. Reject reparse points and cross-volume scope, recheck native edges and sample current drive/root identity. Native tests for root junction rejection, ancestor rename exclusion and ambiguous root rejection are mandatory. This does not guarantee that metadata-only or privileged namespace changes are impossible. Exact-head verification and independent review remain required.
+
 ## Historical baseline and cumulative review
 
 - Original published baseline: 60654e8265650bf74626198ddd9692acddf8071e.

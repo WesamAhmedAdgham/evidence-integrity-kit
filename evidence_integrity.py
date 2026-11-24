@@ -434,7 +434,11 @@ def generate(root, names, *, deny_write=False, snapshot_uuid=None, apfs_source=N
     snapshot = check_protection_request(deny_write, snapshot_uuid, apfs_source)
     if deny_write:
         check_windows_guard_budget(names)
-    root = resolve_path(Path(root), strict=True)
+    if deny_write:
+        from windows_root import lexical_guarded_root
+        root = lexical_guarded_root(root)
+    else:
+        root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('A directory and unique file paths are required')
     if deny_write or snapshot is not None:
@@ -502,7 +506,11 @@ def verify(root, manifest, *, deny_write=False, snapshot_uuid=None, apfs_source=
     snapshot = check_protection_request(deny_write, snapshot_uuid, apfs_source)
     if deny_write:
         check_windows_guard_budget(name for name, _ in validated)
-    root = resolve_path(Path(root), strict=True)
+    if deny_write:
+        from windows_root import lexical_guarded_root
+        root = lexical_guarded_root(root)
+    else:
+        root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('Evidence root must be a directory')
     if deny_write or snapshot is not None:
@@ -513,7 +521,7 @@ def verify(root, manifest, *, deny_write=False, snapshot_uuid=None, apfs_source=
                    for (name, expected), value in zip(validated, values)]
         if deny_write:
             protection = {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles',
-                          'traversal': 'native-relative-descendants'}
+                          'traversal': 'native-relative-from-drive-root'}
         elif apfs_source is not None:
             protection = {'mode': 'macos-apfs-snapshot', 'snapshot_source': snapshot,
                           'scope': 'root-mounted-local-read-only-nodev-apfs-snapshot',

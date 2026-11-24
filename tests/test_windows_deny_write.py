@@ -221,7 +221,7 @@ else:
 
         @contextmanager
         def root_only(path, **kwargs):
-            self.assertEqual(Path(path), self.root)
+            self.assertIn(Path(path), (self.root, Path(self.root.anchor)))
             with real_dir(path, **kwargs) as handle:
                 yield handle
 
@@ -230,7 +230,7 @@ else:
                 patch.object(native, 'relative_handle', wraps=native.relative_handle) as relative:
             report = kit.verify(self.root, self.manifest, deny_write=True)
         self.assertTrue(report['ok'])
-        self.assertEqual(report['protection']['traversal'], 'native-relative-descendants')
+        self.assertEqual(report['protection']['traversal'], 'native-relative-from-drive-root')
         self.assertIn('nested', [call.args[1] for call in relative.call_args_list])
         self.assertIn('a', [call.args[1] for call in relative.call_args_list])
 
@@ -267,3 +267,36 @@ else:
         manifest = kit.generate(self.root, [name], deny_write=True)
         self.assertEqual(manifest['files'][0]['sha256'], hashlib.sha256(data).hexdigest())
         self.assertTrue(kit.verify(self.root, manifest, deny_write=True)['ok'])
+
+
+    def test_guarded_root_junction_rejected_without_hashing(self):
+        from native_fixture_support import junction_fixture
+        alias = self.root / 'root-alias'
+        junction_fixture(self, alias, self.parent)
+        self.addCleanup(os.rmdir, alias)
+        with patch.object(kit.hashlib, 'file_digest') as digest:
+            with self.assertRaises((ValueError, OSError)):
+                kit.generate(alias, ['a'], deny_write=True)
+            digest.assert_not_called()
+
+    def test_guarded_root_ancestor_rename_denied_until_release(self):
+        # Use an additional synthetic ancestor, never attempt to rename TEMP.
+        outer = self.root / 'outer'
+        inner = outer / 'inner'
+        inner.mkdir(parents=True)
+        (inner / 'a').write_bytes(b'AAAA')
+        manifest = kit.generate(inner, ['a'])
+        original = hashlib.file_digest
+        def probe(reader, algorithm):
+            self.assert_denied(outer, 'rename')
+            return original(reader, algorithm)
+        with patch.object(kit.hashlib, 'file_digest', side_effect=probe):
+            self.assertTrue(kit.verify(inner, manifest, deny_write=True)['ok'])
+        self.assertEqual(self.attempt(outer, 'rename').returncode, 0)
+
+    def test_guarded_root_rejects_ambiguous_or_volume_root_path(self):
+        import windows_root as native
+        for value in (self.root.anchor, str(self.root / '..' / self.root.name),
+                      self.root.drive + 'relative', r'\\server\share\folder'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                native.lexical_guarded_root(value)
