@@ -132,3 +132,21 @@ jobs:
           .provenance-venv/bin/python -m evaluation.verify_verifier_report
       - name: Check locked wheel bytes and available publisher attestations
         run: .provenance-venv/bin/python -m evaluation.provenance_diagnostic
+  unattested-source-audit:
+    name: Read-only unattested wheel and source audit
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/ed25519-validator-evaluation' && github.base_ref == 'fix/key-policy-review-packet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Test archive inspection with synthetic fixtures
+        run: python -m unittest discover -s evaluation -p test_source_audit.py -v
+      - name: Compare locked unattested wheel and source bytes without installation
+        run: python -m evaluation.source_audit

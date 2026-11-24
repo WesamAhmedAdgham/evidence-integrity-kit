@@ -1,0 +1,198 @@
+"""Read-only diagnostic comparison of unattested wheels and source archives.
+
+No package installation, extraction, import, or execution. Byte comparisons
+are not publisher attestations or proof that compiled code was built from source.
+"""
+import base64
+import csv
+import hashlib
+import io
+import json
+from pathlib import Path, PurePosixPath
+import stat
+import sys
+import tarfile
+import zipfile
+
+from evaluation.provenance_diagnostic import fetch, select_wheels, MAX_METADATA, MAX_WHEEL
+from tools.verify_signing_environment import load_lock
+
+SOURCE = {
+    'cffi': ('2.1.1', 'dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be', 'src/cffi/'),
+    'pycparser': ('3.0', '600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29', 'pycparser/'),
+}
+CFFI_COMMIT = 'fd33e7700f0ebafe6f30bd5053f13327221b77a2'
+MAX_UNPACKED = 32 * 1024 * 1024
+MAX_MEMBERS = 10000
+
+
+def safe_name(name):
+    if (not name or '\\' in name or '\x00' in name or name.startswith('/')
+            or any(p in ('', '.', '..') for p in name.rstrip('/').split('/'))):
+        raise ValueError('Unsafe archive member name')
+    return name.rstrip('/')
+
+
+def checked_size(count, total):
+    if count > MAX_MEMBERS or total > MAX_UNPACKED:
+        raise ValueError('Archive inspection budget exceeded')
+
+
+def source_files(data):
+    result, seen = {}, set()
+    root, total, count = None, 0, 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r|gz') as archive:
+        for member in archive:
+            count += 1
+            name = safe_name(member.name)
+            if name in seen:
+                raise ValueError('Duplicate source archive member')
+            seen.add(name)
+            parts = name.split('/')
+            if root is None:
+                root = parts[0]
+            if parts[0] != root:
+                raise ValueError('Source archive has multiple roots')
+            total += member.size
+            checked_size(count, total)
+            if member.isdir():
+                continue
+            if not member.isfile() or len(parts) < 2:
+                raise ValueError('Unsupported source archive member')
+            stream = archive.extractfile(member)
+            raw = stream.read(member.size + 1)
+            if len(raw) != member.size:
+                raise ValueError('Source archive member size mismatch')
+            result['/'.join(parts[1:])] = hashlib.sha256(raw).hexdigest()
+    if not result:
+        raise ValueError('Empty source archive')
+    return result
+
+
+def wheel_files(data):
+    result, seen = {}, set()
+    total = 0
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        members = archive.infolist()
+        checked_size(len(members), 0)
+        for member in members:
+            name = safe_name(member.filename)
+            if name in seen:
+                raise ValueError('Duplicate wheel member')
+            seen.add(name)
+            total += member.file_size
+            checked_size(len(members), total)
+            mode = member.external_attr >> 16
+            if stat.S_ISLNK(mode):
+                raise ValueError('Unexpected wheel symlink')
+            if member.is_dir():
+                continue
+            raw = archive.read(member)
+            if len(raw) != member.file_size:
+                raise ValueError('Wheel member size mismatch')
+            result[name] = raw
+    records = [name for name in result if name.endswith('.dist-info/RECORD')]
+    if len(records) != 1:
+        raise ValueError('Expected exactly one wheel RECORD')
+    record = records[0]
+    listed = set()
+    for row in csv.reader(io.StringIO(result[record].decode('utf-8'), newline='')):
+        if len(row) != 3:
+            raise ValueError('Invalid wheel RECORD row')
+        name, digest, size = row
+        safe_name(name)
+        if name in listed or name not in result:
+            raise ValueError('Duplicate or missing wheel RECORD member')
+        listed.add(name)
+        if name == record:
+            if digest or size:
+                raise ValueError('Unexpected self-digest in RECORD')
+            continue
+        raw = result[name]
+        expected = 'sha256=' + base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).decode().rstrip('=')
+        if digest != expected or size != str(len(raw)):
+            raise ValueError('Wheel RECORD digest or size mismatch')
+    if listed != set(result):
+        raise ValueError('Wheel contains unrecorded files')
+    return {name: hashlib.sha256(raw).hexdigest() for name, raw in result.items()}
+
+
+def compare_package(files, source, package, source_prefix):
+    prefix = package + '/'
+    wheel = {name[len(prefix):]: digest for name, digest in files.items()
+             if name.startswith(prefix) and name.endswith(('.py', '.h', '.c'))}
+    reference = {name[len(source_prefix):]: digest for name, digest in source.items()
+                 if name.startswith(source_prefix) and name.endswith(('.py', '.h', '.c'))}
+    if not wheel or not reference:
+        raise ValueError('Empty package source comparison')
+    return {
+        'matched': sorted(name for name in wheel if reference.get(name) == wheel[name]),
+        'different': sorted(name for name in wheel if name in reference and reference[name] != wheel[name]),
+        'wheel_only': sorted(set(wheel) - set(reference)),
+        'source_only': sorted(set(reference) - set(wheel)),
+    }
+
+
+def native_inventory(files):
+    return {name: digest for name, digest in files.items()
+            if any(marker in name.lower() for marker in ('.so', '.pyd', '.dll', '.dylib', '.exe'))}
+
+
+def main():
+    pins = load_lock(Path('evaluation/requirements-validator.txt'))
+    audited = 0
+    mismatch = False
+    for name, (version, digest, prefix) in SOURCE.items():
+        if pins[name][0] != version:
+            raise ValueError('Source version does not match evaluation lock')
+        meta = json.loads(fetch(f'https://pypi.org/pypi/{name}/{version}/json', 'pypi.org', MAX_METADATA))
+        sdists = [row for row in meta['urls'] if row['packagetype'] == 'sdist'
+                  and row['digests']['sha256'] == digest and not row.get('yanked')]
+        if len(sdists) != 1:
+            raise ValueError('Pinned source distribution not found')
+        raw = fetch(sdists[0]['url'], 'files.pythonhosted.org', MAX_WHEEL)
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError('Source distribution digest mismatch')
+        source = source_files(raw)
+        if name == 'cffi':
+            # GitHub metadata reports the exact commit signed; the independent
+            # maintainer key and source archive identity still need review.
+            upstream = fetch('https://codeload.github.com/python-cffi/cffi/tar.gz/' + CFFI_COMMIT,
+                             'codeload.github.com', MAX_WHEEL)
+            git = source_files(upstream)
+            keys = {k for k in set(source) | set(git)
+                    if k.startswith(('src/cffi/', 'src/c/')) and k.endswith(('.py', '.h', '.c'))}
+            changed = sorted(k for k in keys if k in source and k in git and source[k] != git[k])
+            only_source = sorted(k for k in keys if k in source and k not in git)
+            only_git = sorted(k for k in keys if k in git and k not in source)
+            matched = sorted(k for k in keys if k in source and k in git and source[k] == git[k])
+            if not matched:
+                raise ValueError('Empty CFFI upstream comparison')
+            print(json.dumps({'upstream_commit': CFFI_COMMIT, 'archive_sha256': hashlib.sha256(upstream).hexdigest(),
+                              'matched_source_files': matched, 'different': changed,
+                              'sdist_only': only_source, 'git_only': only_git,
+                              'independently_authenticated': False}, sort_keys=True), flush=True)
+            mismatch |= bool(changed or only_source or only_git)
+        for row in select_wheels(meta, pins[name][1]):
+            data = fetch(row['url'], 'files.pythonhosted.org', MAX_WHEEL)
+            if hashlib.sha256(data).hexdigest() != row['digests']['sha256']:
+                raise ValueError('Wheel digest mismatch')
+            files = wheel_files(data)
+            comparison = compare_package(files, source, name, prefix)
+            native = native_inventory(files)
+            mismatch |= bool(comparison['different'] or comparison['wheel_only'] or comparison['source_only'])
+            print(json.dumps({'package': name, 'filename': row['filename'], 'sha256': row['digests']['sha256'],
+                              'record_verified': True, 'source_sha256': digest, 'comparison': comparison,
+                              'native_inventory': native, 'publisher_verified': False,
+                              'release_approval': False}, sort_keys=True), flush=True)
+            audited += 1
+    if audited != 7:
+        raise ValueError('Unexpected unattested wheel count')
+    print(json.dumps({'audited': audited, 'source_differences': mismatch,
+                      'native_build_provenance_proven': False, 'release_approval': False}, sort_keys=True))
+    # All seven still lack publisher attestations; do not imply release acceptance.
+    return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
