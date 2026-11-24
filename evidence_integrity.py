@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -148,6 +149,44 @@ def content_metadata_changed(first, second):
     return (first.st_size, first.st_mtime_ns) != (second.st_size, second.st_mtime_ns)
 
 
+class SizedEvidenceReader:
+    """Expose only the sampled file size plus one EOF probe to file_digest."""
+    def __init__(self, stream, size):
+        if type(size) is not int or size < 0:
+            raise ValueError('Invalid evidence size')
+        self.stream = stream
+        self.remaining = size
+        self.eof_checked = False
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self.remaining == 0:
+            extra = self.stream.read(1)
+            if extra != b'':
+                raise ValueError('Evidence changed during hashing: expected end of file')
+            self.eof_checked = True
+            return 0
+        view = memoryview(buffer)[:min(len(buffer), self.remaining)]
+        count = self.stream.readinto(view)
+        if type(count) is not int or not 0 < count <= len(view):
+            raise ValueError('Evidence changed during hashing: incomplete or invalid read')
+        self.remaining -= count
+        return count
+
+
+def register_identity(metadata, name, identities):
+    """Reject multiple listed paths resolving to the same sampled file identity."""
+    if not metadata.st_ino:
+        raise ValueError(f'Evidence identity unavailable: {name!r}')
+    identity = (metadata.st_dev, metadata.st_ino)
+    previous = identities.get(identity)
+    if previous is not None and previous != name:
+        raise ValueError(f'Evidence file identity alias: {previous!r} and {name!r}')
+    identities[identity] = name
+
+
 def digest(path, expected, *, root, name, root_fd):
     with open_evidence(path, root=root, name=name, root_fd=root_fd) as stream:
         before = os.fstat(stream.fileno())
@@ -157,7 +196,10 @@ def digest(path, expected, *, root, name, root_fd):
             raise ValueError(f'Opened evidence is not a regular single-link file: {path.name!r}')
         if content_metadata_changed(expected, before):
             raise ValueError(f'Evidence changed before hashing: {name!r}')
-        result = hashlib.file_digest(stream, 'sha256').hexdigest()
+        reader = SizedEvidenceReader(stream, before.st_size)
+        result = hashlib.file_digest(reader, 'sha256').hexdigest()
+        if reader.remaining or not reader.eof_checked:
+            raise ValueError('Evidence changed during hashing: incomplete read')
         after = os.fstat(stream.fileno())
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
         if any(getattr(before, field) != getattr(after, field) for field in fields):
@@ -195,10 +237,12 @@ def generate(root, names):
         raise ValueError('A directory and unique file paths are required')
     files = []
     processed = []
+    identities = {}
     with pinned_root(root) as root_fd:
         for name in sorted(names):
             check_root_identity(root, root_fd)
             path, expected = evidence_path(root, name)
+            register_identity(expected, name, identities)
             value = digest(path, expected, root=root, name=name, root_fd=root_fd)
             files.append({'path': name, 'sha256': value})
             processed.append((name, expected))
@@ -241,11 +285,13 @@ def verify(root, manifest):
         raise ValueError('Evidence root must be a directory')
     results = []
     processed = []
+    identities = {}
     with pinned_root(root) as root_fd:
         for name, expected_digest in validated:
             check_root_identity(root, root_fd)
             try:
                 path, expected = evidence_path(root, name)
+                register_identity(expected, name, identities)
                 value = digest(path, expected, root=root, name=name, root_fd=root_fd)
                 status = 'match' if value == expected_digest else 'mismatch'
             except (OSError, ValueError) as exc:
@@ -275,6 +321,13 @@ def reject_nonfinite_constant(value):
     raise ValueError(f'Non-standard JSON constant: {value}')
 
 
+def finite_json_float(value):
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError('Non-finite JSON number')
+    return parsed
+
+
 def read_control_bytes(path, *, limit, label):
     """Read bounded binary control input with sampled identity/stability checks."""
     if type(limit) is not int or limit < 0:
@@ -300,8 +353,10 @@ def read_control_bytes(path, *, limit, label):
             raise ValueError(f'{label} path changed during reading')
         if content_metadata_changed(after, current):
             raise ValueError(f'{label} changed after reading')
-    if len(raw) > limit:
+    if len(raw) > limit or before.st_size > limit:
         raise ValueError(f'{label} exceeds {limit} byte limit')
+    if len(raw) != before.st_size:
+        raise ValueError(f'{label} byte count differs from sampled size')
     return raw
 
 
@@ -318,7 +373,8 @@ def decode_manifest(raw):
     try:
         return json.loads(raw.decode('utf-8'),
                           object_pairs_hook=reject_duplicate_keys,
-                          parse_constant=reject_nonfinite_constant)
+                          parse_constant=reject_nonfinite_constant,
+                          parse_float=finite_json_float)
     except RecursionError as exc:
         raise ValueError('Manifest JSON nesting exceeds decoder limit') from exc
 
