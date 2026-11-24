@@ -4,7 +4,11 @@ A small, offline Python CLI for generating and verifying SHA-256 manifests for e
 
 ## Requirements
 
-Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; a hash-locked wheel allowlist was verified in native CI at 2cd3fb3; independent review and release acceptance remain pending.
+Unsigned mode requires Python 3.11 or later on supported Windows and POSIX systems; native CI verifies CPython 3.11 and 3.13. The optional signing lock covers only CPython 3.11 and 3.13 on Linux x86-64 (glibc >= 2.34), Windows x86-64, and macOS ARM64. Other interpreter versions or architectures are not covered by the current hash allowlist. Signing provider release acceptance remains blocked.
+
+The manifest and create preflight also limit the selection to 10,000 entries, 32,768 total path components, and 262,144 total Unicode path characters (at most 128 components per path). These limits bound trie construction, not total bytes of evidence, KDF work or wall-clock I/O. Do not expose the CLI as an untrusted-input service without separately enforced resource isolation.
+
+Windows additionally samples native FILE_BASIC_INFO ChangeTime before hashing and at batch revalidation. This detects some changes hidden by a restored modification time; it is not an immutable snapshot or continuous writer exclusion.
 
 ## Example
 
