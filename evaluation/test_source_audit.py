@@ -6,7 +6,7 @@ import tarfile
 import unittest
 import zipfile
 
-from evaluation.source_audit import source_files, wheel_files, compare_package, native_inventory, pure_wheel_layout
+from evaluation.source_audit import source_files, wheel_files, compare_package, native_inventory, pure_wheel_layout, pure_metadata_check
 
 
 def make_wheel(raw=b'x', recorded=b'x', extra=False):
@@ -117,3 +117,26 @@ class SourceAuditTests(unittest.TestCase):
         self.assertFalse(pure_wheel_layout({k: v for k, v in files.items()
                          if k != dist + 'licenses/LICENSE'}, source,
                          'pkg', '1')['license_matches_sdist'])
+
+    def test_pure_metadata_install_fields(self):
+        dist = 'pycparser-3.0.dist-info/'
+        meta = b'Metadata-Version: 2.4\nName: pycparser\nVersion: 3.0\nRequires-Python: >=3.10\n\nDescription\n'
+        wheel = b'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n'
+        valid = {dist + 'METADATA': meta, dist + 'WHEEL': wheel}
+        self.assertTrue(pure_metadata_check(valid, 'pycparser', '3.0')['selected_install_fields_verified'])
+        for bad in (meta.replace(b'Name: pycparser', b'Name: other'),
+                    meta.replace(b'Version: 3.0', b'Version: 4.0'),
+                    meta.replace(b'Requires-Python: >=3.10', b'Requires-Python: >=3.14'),
+                    meta.replace(b'\n\n', b'\nRequires-Dist: unexpected\n\n', 1),
+                    meta.replace(b'\n\n', b'\nProvides-Extra: unexpected\n\n', 1),
+                    meta.replace(b'\n\n', b'\nName: pycparser\n\n', 1)):
+            with self.assertRaises(ValueError):
+                pure_metadata_check(dict(valid, **{dist + 'METADATA': bad}), 'pycparser', '3.0')
+        for bad in (wheel.replace(b'true', b'false'),
+                    wheel.replace(b'py3-none-any', b'cp313-none-any'),
+                    wheel.replace(b'\n\n', b'\nBuild: 1\n\n', 1),
+                    wheel.replace(b'\n\n', b'\nTag: py3-none-any\n\n', 1)):
+            with self.assertRaises(ValueError):
+                pure_metadata_check(dict(valid, **{dist + 'WHEEL': bad}), 'pycparser', '3.0')
+        with self.assertRaises(ValueError):
+            pure_metadata_check({dist + 'METADATA': meta}, 'pycparser', '3.0')

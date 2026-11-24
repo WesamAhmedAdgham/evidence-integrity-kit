@@ -5,6 +5,8 @@ are not publisher attestations or proof that compiled code was built from source
 """
 import base64
 import csv
+from email import policy
+from email.parser import BytesParser
 import hashlib
 import io
 import json
@@ -75,7 +77,7 @@ def source_files(data, *, links=None):
     return result
 
 
-def wheel_files(data):
+def wheel_files(data, *, metadata=None):
     result, seen = {}, set()
     total = 0
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -120,6 +122,11 @@ def wheel_files(data):
             raise ValueError('Wheel RECORD digest or size mismatch')
     if listed != set(result):
         raise ValueError('Wheel contains unrecorded files')
+    if metadata is not None:
+        # Capture only the RECORD-verified metadata bytes, never extract.
+        for name, raw in result.items():
+            if name.endswith(('.dist-info/METADATA', '.dist-info/WHEEL')):
+                metadata[name] = raw
     return {name: hashlib.sha256(raw).hexdigest() for name, raw in result.items()}
 
 
@@ -159,6 +166,40 @@ def pure_wheel_layout(files, source, package, version):
             'missing': sorted(required - set(files)),
             'license_paths': licenses, 'license_matches_sdist': license_matches,
             'metadata_semantics_verified': False}
+
+
+def pure_metadata_check(metadata, package, version):
+    """Narrow expected install semantics for the locked pure pycparser wheel."""
+    dist = f'{package}-{version}.dist-info/'
+    expected = {dist + 'METADATA', dist + 'WHEEL'}
+    if set(metadata) != expected:
+        raise ValueError('Unexpected pure wheel metadata paths')
+    def parse(name):
+        raw = metadata[dist + name]
+        if len(raw) > 256 * 1024:
+            raise ValueError('Wheel metadata exceeds inspection budget')
+        raw.decode('utf-8', errors='strict')
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        if msg.defects or any(getattr(value, 'defects', ()) for _, value in msg.items()):
+            raise ValueError('Malformed wheel metadata')
+        return msg
+    def expect(msg, field, value):
+        if msg.get_all(field, []) != [value]:
+            raise ValueError(f'Unexpected pure wheel {field}')
+    meta, wheel = parse('METADATA'), parse('WHEEL')
+    expect(meta, 'Name', package)
+    expect(meta, 'Version', version)
+    expect(meta, 'Requires-Python', '>=3.10')
+    if meta.get_all('Requires-Dist') or meta.get_all('Provides-Extra'):
+        raise ValueError('Unexpected pure wheel dependencies or extras')
+    expect(wheel, 'Wheel-Version', '1.0')
+    expect(wheel, 'Root-Is-Purelib', 'true')
+    expect(wheel, 'Tag', 'py3-none-any')
+    if wheel.get_all('Build'):
+        raise ValueError('Unexpected pure wheel build tag')
+    return {'name': package, 'version': version, 'requires_python': '>=3.10',
+            'requires_dist': [], 'provides_extra': [], 'tag': 'py3-none-any',
+            'root_is_purelib': True, 'selected_install_fields_verified': True}
 
 
 def native_inventory(files):
@@ -229,18 +270,22 @@ def main():
             data = fetch(row['url'], 'files.pythonhosted.org', MAX_WHEEL)
             if hashlib.sha256(data).hexdigest() != row['digests']['sha256']:
                 raise ValueError('Wheel digest mismatch')
-            files = wheel_files(data)
+            metadata = {} if name == 'pycparser' else None
+            files = wheel_files(data, metadata=metadata)
             comparison = compare_package(files, source, name, prefix, all_files=(name == 'pycparser'))
             native = native_inventory(files)
             layout = None
+            metadata_check = None
             if name == 'pycparser':
                 layout = pure_wheel_layout(files, source, name, version)
+                metadata_check = pure_metadata_check(metadata, name, version)
                 mismatch |= bool(layout['unexpected'] or layout['missing'] or
                                  not layout['license_matches_sdist'] or native)
             mismatch |= bool(comparison['different'] or comparison['wheel_only'] or comparison['source_only'])
             print(json.dumps({'package': name, 'filename': row['filename'], 'sha256': row['digests']['sha256'],
                               'record_verified': True, 'source_sha256': digest, 'comparison': comparison,
                               'native_inventory': native, 'pure_wheel_layout': layout,
+                              'pure_metadata_check': metadata_check,
                               'publisher_verified': False,
                               'release_approval': False}, sort_keys=True), flush=True)
             audited += 1
