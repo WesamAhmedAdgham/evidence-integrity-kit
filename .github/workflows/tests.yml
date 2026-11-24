@@ -109,3 +109,26 @@ jobs:
         run: python -m pip check
       - name: Exercise synthetic point validation
         run: python -m unittest discover -s evaluation -v
+  provenance-diagnostic:
+    name: Isolated PyPI provenance diagnostic
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/ed25519-validator-evaluation' && github.base_ref == 'fix/key-policy-review-packet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Install diagnostic verifier in separate virtual environment
+        run: |
+          python -m venv .provenance-venv
+          .provenance-venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: --report verifier-install-report.json pypi-attestations==0.0.32
+          .provenance-venv/bin/python -m pip check
+          .provenance-venv/bin/python -m pip freeze
+          cat verifier-install-report.json
+      - name: Check locked wheel bytes and available publisher attestations
+        run: .provenance-venv/bin/python -m evaluation.provenance_diagnostic
