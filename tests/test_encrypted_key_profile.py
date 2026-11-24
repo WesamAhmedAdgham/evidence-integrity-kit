@@ -91,3 +91,45 @@ class EncryptedKeyProfileTests(unittest.TestCase):
                     keys.load_private_key(raw, b'synthetic')
                 prompt.assert_not_called()
                 provider.assert_not_called()
+
+    def test_every_truncated_prefix_and_noncanonical_outer_length_rejected(self):
+        der = profile()
+        for i in range(len(der)):
+            with self.subTest(length=i), self.assertRaises(ValueError):
+                validate_encrypted_key_profile(der[:i])
+        # The fixture uses short-form or one-byte long-form length. Rewrite
+        # that length with an unnecessary leading zero, preserving payload.
+        n = der[1]
+        if n < 128:
+            malformed = b'\x30\x81' + bytes([n]) + der[2:]
+        else:
+            malformed = b'\x30\x82\x00' + der[2:]
+        with self.assertRaises(ValueError):
+            validate_encrypted_key_profile(malformed)
+
+    def test_public_key_noncanonical_spki_rejected_before_provider(self):
+        prefix = bytes.fromhex('302a300506032b6570032100')
+        der = prefix + bytes(range(32))
+        def public_pem(data):
+            return b'-----BEGIN PUBLIC KEY-----\n' + base64.b64encode(data) + b'\n-----END PUBLIC KEY-----\n'
+        with patch.object(keys, 'serialization_provider') as provider:
+            for bad in (der[:-1], der+b'\x00', der[:8]+b'\x71'+der[9:],
+                        der[:11]+b'\x01'+der[12:],
+                        b'\x30\x81\x2a'+der[2:]):
+                with self.subTest(length=len(bad)), self.assertRaisesRegex(ValueError, 'canonical SPKI'):
+                    keys.load_public_key(public_pem(bad))
+            provider.assert_not_called()
+
+    def test_passphrase_byte_limit_before_provider(self):
+        with patch.object(keys, 'serialization_provider') as provider:
+            with self.assertRaisesRegex(ValueError, 'passphrase exceeds byte limit'):
+                keys.load_private_key(pem(profile()), b'x'*(keys.MAX_PASSPHRASE_BYTES+1))
+            provider.assert_not_called()
+        self.assertEqual(keys.validate_passphrase(b'x'*keys.MAX_PASSPHRASE_BYTES),
+                         b'x'*keys.MAX_PASSPHRASE_BYTES)
+        for phrase in ('x'*1025, '\u00e9'*513):
+            with patch.object(keys.sys.stdin, 'isatty', return_value=True), \
+                    patch.object(keys.sys.stderr, 'isatty', return_value=True), \
+                    patch.object(keys.getpass, 'getpass', return_value=phrase):
+                with self.assertRaisesRegex(ValueError, 'passphrase exceeds byte limit'):
+                    keys.prompt_passphrase()
