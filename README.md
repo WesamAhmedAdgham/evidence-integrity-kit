@@ -15,6 +15,8 @@ python evidence_integrity.py verify --root ./evidence --manifest manifest.json
 
 Run `create` on a trusted, stable evidence directory. Keep the resulting manifest in a separate trusted location. The command prints JSON and does not write into the evidence directory. `verify` checks the listed files and produces a JSON report. Exit codes: `0` success, `1` mismatch or inaccessible listed evidence, `2` invalid input or operational error.
 
+Manifest JSON must not contain duplicate object keys (including nested keys) or the non-standard constants `NaN`, `Infinity`, and `-Infinity`. These inputs are rejected with exit code `2` before evidence hashing. This validation does not authenticate the manifest.
+
 ## Security model and limits
 
 This tool verifies content against a supplied manifest; it does not authenticate the manifest, prove authorship, establish chain of custody, or prove that the directory contains no additional files. It checks explicit relative paths and rejects traversal and detected symbolic links (and junctions on supported Python versions). It is not a sandbox and is not designed to withstand concurrent hostile filesystem changes. Use a trusted, stable local directory and keep manifests separate from untrusted evidence. Manifest paths may themselves be sensitive; inspect before sharing. Never publish actual client evidence or private manifests.

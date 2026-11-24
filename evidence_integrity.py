@@ -66,6 +66,25 @@ def verify(root, manifest):
     return {'ok': all(r['status'] == 'match' for r in results), 'files': results}
 
 
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f'Duplicate JSON key: {key!r}')
+        result[key] = value
+    return result
+
+
+def reject_nonfinite_constant(value):
+    raise ValueError(f'Non-standard JSON constant: {value}')
+
+
+def load_manifest(path):
+    return json.loads(path.read_text(encoding='utf-8'),
+                      object_pairs_hook=reject_duplicate_keys,
+                      parse_constant=reject_nonfinite_constant)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -81,7 +100,7 @@ def main(argv=None):
             result = generate(args.root, args.files)
             code = 0
         else:
-            result = verify(args.root, json.loads(args.manifest.read_text(encoding='utf-8')))
+            result = verify(args.root, load_manifest(args.manifest))
             code = 0 if result['ok'] else 1
         print(json.dumps(result, indent=2, ensure_ascii=True))
         return code
