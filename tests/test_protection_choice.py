@@ -24,7 +24,7 @@ class ProtectionChoiceTests(unittest.TestCase):
                 patch.object(kit, 'verify_signed') as signed, patch.object(kit, 'load_manifest') as load:
             for args in self.arguments():
                 for flags in ([], ['--assume-stable-tree', '--windows-deny-write'],
-                              ['--linux-btrfs-snapshot', 'x', '--windows-deny-write']):
+                              ['--linux-btrfs-snapshot', 'x', '--macos-apfs-snapshot', 'y']):
                     with self.subTest(args=args, flags=flags), contextlib.redirect_stderr(io.StringIO()), \
                             contextlib.redirect_stdout(io.StringIO()) as out, self.assertRaises(SystemExit) as exc:
                         kit.main(args + flags)

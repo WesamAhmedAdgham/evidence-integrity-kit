@@ -13,9 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 flag, value, root = sys.argv[1:]
 root = Path(root)
-if flag != '--linux-btrfs-snapshot':
-    raise ValueError('Only Btrfs native snapshot fixture is in release scope')
-kwargs = {'snapshot_uuid': value}
+kwargs = {'snapshot_uuid': value} if flag == '--linux-btrfs-snapshot' else {'apfs_source': value}
 cli = Path(kit.__file__).resolve()
 with tempfile.TemporaryDirectory() as td:
     base = Path(td)
