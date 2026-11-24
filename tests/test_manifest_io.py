@@ -38,12 +38,15 @@ class ManifestIOTests(unittest.TestCase):
             decoder.assert_not_called()
 
     def test_read_is_bounded(self):
-        with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'open') as op:
+        self.path.write_bytes(b'{}')
+        metadata = self.path.stat()
+        with patch('evidence_integrity.open_evidence') as op, \
+                patch('evidence_integrity.os.fstat', return_value=metadata):
             stream = op.return_value.__enter__.return_value
             stream.read.return_value = b'{}'
             self.assertEqual(load_manifest(self.path), {})
             stream.read.assert_called_once_with(MAX_MANIFEST_BYTES + 1)
-            op.assert_called_once_with('rb')
+            op.assert_called_once_with(self.path)
 
     def test_multibyte_limit_counts_bytes(self):
         self.path.write_bytes('{"x":"é"}'.encode('utf-8'))
@@ -64,7 +67,7 @@ class ManifestIOTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'FIFO creation unavailable')
     def test_fifo_rejected_before_open(self):
         os.mkfifo(self.path)
-        with patch.object(Path, 'open', side_effect=AssertionError('must not open FIFO')):
+        with patch('evidence_integrity.open_evidence', side_effect=AssertionError('must not open FIFO')):
             with self.assertRaisesRegex(ValueError, 'regular file'):
                 load_manifest(self.path)
 

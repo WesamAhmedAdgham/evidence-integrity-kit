@@ -147,7 +147,9 @@ def reject_nonfinite_constant(value):
 def load_manifest(path):
     if not path.is_file():
         raise ValueError('Manifest must be a regular file')
-    with path.open('rb') as stream:
+    with open_evidence(path) as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('Manifest must be a regular file')
         raw = stream.read(MAX_MANIFEST_BYTES + 1)
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
