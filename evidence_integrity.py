@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import stat
 import sys
@@ -60,7 +61,13 @@ def evidence_path(root, name):
 
 def digest(path):
     with path.open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        before = os.fstat(stream.fileno())
+        result = hashlib.file_digest(stream, 'sha256').hexdigest()
+        after = os.fstat(stream.fileno())
+        fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        if any(getattr(before, field) != getattr(after, field) for field in fields):
+            raise ValueError(f'Evidence changed during hashing: {path.name!r}')
+        return result
 
 
 def generate(root, names):
