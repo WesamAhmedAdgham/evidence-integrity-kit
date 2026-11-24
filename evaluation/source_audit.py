@@ -139,6 +139,28 @@ def compare_package(files, source, package, source_prefix, *, all_files=False):
     }
 
 
+def pure_wheel_layout(files, source, package, version):
+    """Inspect the complete install layout of this pure package, not just code.
+
+    The known wheel may contain package files and standard dist-info metadata
+    only. No .data relocation, .pth startup hooks, other packages or binaries.
+    This is an inventory check, not semantic authentication of metadata.
+    """
+    prefix = package + '/'
+    dist = f'{package}-{version}.dist-info/'
+    package_files = {name for name in source if name.startswith(prefix)}
+    required = package_files | {dist + name for name in ('METADATA', 'WHEEL', 'RECORD')}
+    license_paths = {dist + 'LICENSE', dist + 'licenses/LICENSE'}
+    allowed = required | license_paths | {dist + 'top_level.txt'}
+    licenses = sorted(set(files) & license_paths)
+    license_matches = (len(licenses) == 1 and 'LICENSE' in source and
+                       files[licenses[0]] == source['LICENSE'])
+    return {'unexpected': sorted(set(files) - allowed),
+            'missing': sorted(required - set(files)),
+            'license_paths': licenses, 'license_matches_sdist': license_matches,
+            'metadata_semantics_verified': False}
+
+
 def native_inventory(files):
     return {name: digest for name, digest in files.items()
             if any(marker in name.lower() for marker in ('.so', '.pyd', '.dll', '.dylib', '.exe'))}
@@ -193,11 +215,14 @@ def main():
             git = source_files(upstream, links=upstream_links)
             comparison = compare_package(source, git, name, prefix, all_files=True)
             relevant_links = sorted(k for k in upstream_links if k.startswith(prefix))
+            license_matches = ('LICENSE' in source and source['LICENSE'] == git.get('LICENSE'))
+            mismatch |= not license_matches
             mismatch |= bool(comparison['different'] or comparison['wheel_only'] or
                              comparison['source_only'] or relevant_links)
             print(json.dumps({'package': name, 'upstream_commit': PYCPARSER_COMMIT,
                               'archive_sha256': hashlib.sha256(upstream).hexdigest(),
                               'sdist_vs_git_package': comparison,
+                              'license_matches_upstream': license_matches,
                               'upstream_package_symlinks_not_followed': relevant_links,
                               'independently_authenticated': False}, sort_keys=True), flush=True)
         for row in select_wheels(meta, pins[name][1]):
@@ -207,10 +232,16 @@ def main():
             files = wheel_files(data)
             comparison = compare_package(files, source, name, prefix, all_files=(name == 'pycparser'))
             native = native_inventory(files)
+            layout = None
+            if name == 'pycparser':
+                layout = pure_wheel_layout(files, source, name, version)
+                mismatch |= bool(layout['unexpected'] or layout['missing'] or
+                                 not layout['license_matches_sdist'] or native)
             mismatch |= bool(comparison['different'] or comparison['wheel_only'] or comparison['source_only'])
             print(json.dumps({'package': name, 'filename': row['filename'], 'sha256': row['digests']['sha256'],
                               'record_verified': True, 'source_sha256': digest, 'comparison': comparison,
-                              'native_inventory': native, 'publisher_verified': False,
+                              'native_inventory': native, 'pure_wheel_layout': layout,
+                              'publisher_verified': False,
                               'release_approval': False}, sort_keys=True), flush=True)
             audited += 1
     if audited != 7:

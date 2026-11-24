@@ -6,7 +6,7 @@ import tarfile
 import unittest
 import zipfile
 
-from evaluation.source_audit import source_files, wheel_files, compare_package, native_inventory
+from evaluation.source_audit import source_files, wheel_files, compare_package, native_inventory, pure_wheel_layout
 
 
 def make_wheel(raw=b'x', recorded=b'x', extra=False):
@@ -92,3 +92,28 @@ class SourceAuditTests(unittest.TestCase):
                          {'matched': ['a.py'], 'different': ['_ast.cfg'],
                           'wheel_only': ['extra.dat'], 'source_only': ['missing.txt']})
 
+    def test_pure_wheel_complete_layout(self):
+        dist = 'pkg-1.dist-info/'
+        source = {'pkg/a.py': 'a', 'pkg/data.cfg': 'b', 'LICENSE': 'license'}
+        files = {'pkg/a.py': 'a', 'pkg/data.cfg': 'b',
+                 dist + 'METADATA': 'metadata', dist + 'WHEEL': 'wheel',
+                 dist + 'RECORD': 'record', dist + 'licenses/LICENSE': 'license'}
+        result = pure_wheel_layout(files, source, 'pkg', '1')
+        self.assertEqual(result['unexpected'], [])
+        self.assertEqual(result['missing'], [])
+        self.assertTrue(result['license_matches_sdist'])
+        self.assertFalse(result['metadata_semantics_verified'])
+        for path in ('startup.pth', 'other/__init__.py', 'pkg-1.data/scripts/run',
+                     dist + 'entry_points.txt', 'pkg/unexpected.py'):
+            with self.subTest(path=path):
+                self.assertEqual(pure_wheel_layout(dict(files, **{path: 'x'}),
+                                 source, 'pkg', '1')['unexpected'], [path])
+        for path in ('pkg/data.cfg', dist + 'METADATA', dist + 'RECORD'):
+            self.assertEqual(pure_wheel_layout({k: v for k, v in files.items() if k != path},
+                             source, 'pkg', '1')['missing'], [path])
+        for change in ({dist + 'licenses/LICENSE': 'different'}, {dist + 'LICENSE': 'license'}):
+            self.assertFalse(pure_wheel_layout(dict(files, **change), source,
+                             'pkg', '1')['license_matches_sdist'])
+        self.assertFalse(pure_wheel_layout({k: v for k, v in files.items()
+                         if k != dist + 'licenses/LICENSE'}, source,
+                         'pkg', '1')['license_matches_sdist'])
