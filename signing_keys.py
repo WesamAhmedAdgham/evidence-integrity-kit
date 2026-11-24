@@ -7,6 +7,7 @@ import re
 import sys
 import warnings
 
+from encrypted_key_profile import validate_encrypted_key_profile
 from evidence_integrity import read_control_bytes
 from manifest_signatures import provider
 
@@ -74,6 +75,7 @@ def public_key_fingerprint(key):
 def _load_encrypted_private_der(der, password):
     if type(password) is not bytes or not password:
         raise ValueError('Nonempty private key passphrase required')
+    validate_encrypted_key_profile(der)
     ed25519, serialization, unsupported = serialization_provider()
     try:
         key = serialization.load_der_private_key(der, password=password)
@@ -117,5 +119,6 @@ def read_public_key(path):
 def read_private_key(path):
     raw = read_control_bytes(path, limit=MAX_KEY_BYTES, label='Private key')
     der = pem_payload(raw, PRIVATE_LABEL)
+    validate_encrypted_key_profile(der)  # Reject excessive KDF work before prompting.
     serialization_provider()  # Fail on missing dependency before prompting.
     return _load_encrypted_private_der(der, prompt_passphrase())
