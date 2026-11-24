@@ -4,7 +4,23 @@ Status: **development candidate, not approved for production or release.**
 AI-assisted implementation-side review. This document is not independent
 audit evidence or an owner sign-off.
 
-## Baseline and cumulative review
+## Codex audit remediation (2026-11-24)
+
+Audited SHA: `e97eb72328a91266f72b88ee91dd3a0de0e4ad47`. Independent AI review (not human approval): NO-GO. Run 45310410001: 214 methods, 1,156 passes, 128 platform skips, zero functional failures; all six provider checks rejected the locked provider. Codex reproduced a real same-size Windows write with restored mtime after hashing that returned match. The final-sample race remains fundamentally outside the stable-tree model.
+
+| Audit ID | Current remediation / residual requirement |
+| --- | --- |
+| EIKA-01 | Blocked: retain provider gate; obtain and review released patched artifacts. |
+| EIKA-02 | Native Windows ChangeTime sampling plus audit-derived regression; exact-head native CI required. Not continuous exclusion. Demonstrate external immutable acquisition before point-in-time use. |
+| EIKA-03 | Aggregate limits on entries, path components and characters before trie allocation; evidence bytes, I/O time and key KDF isolation remain external. |
+| EIKA-04 | Provider check also runs on main pushes; owner must verify actual repository rules and publication controls. No auto-publishing. |
+| EIKA-05 | Permission-denied fixtures explicitly classified, strict native CI mode; regressions required. |
+| EIKA-06 | README separates unsigned interpreter requirement and signed wheel lock matrix. |
+| EIKA-07 | Historical baseline separated from current audit; use latest exact-head CI and independent retest for acceptance. |
+
+Operational acceptance procedure: acquire an externally trusted immutable collection or exclude all writers and namespace changes (including writable aliases) for the full acquisition and comparison interval. Document the filesystem, snapshot/ACL boundary, trusted root ancestors and control storage. Test independent writer and namespace-change attempts using synthetic files in the actual deployment environment; record denied attempts and unchanged digests, then obtain independent review. Never infer snapshot immutability from this CLI's success. Retain the verified snapshot and authenticated manifest in trusted custody if needed. This procedure is a requirement, not proof that a particular environment meets it.
+
+## Historical baseline and cumulative review
 
 - Published main: 60654e8265650bf74626198ddd9692acddf8071e.
 - Native-verified consolidated baseline: 38a53a9c499041affc7f385b028ffc6a30ad1f2f.
@@ -61,7 +77,7 @@ Sources reviewed:
 
 The exact wheel hash policy and successful prior native installs are
 evidence of reproducibility, not independent publisher authentication.
-The new CI check must verify the actual install report for all three
+The CI check must verify the actual install report for all three
 distributions and log the linked provider. Independent provenance review
 and current advisories for all dependencies remain open. As of 2026-11-24,
 PyPI and the stable upstream changelog still identify 50.0.2 as the current
