@@ -18,9 +18,27 @@ FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 FILE_ATTRIBUTE_DIRECTORY = 0x0010
 FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+FILE_BASIC_INFO_CLASS = 0
 FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
 FILE_ID_INFO_CLASS = 18
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+class FileBasicInfo(ctypes.Structure):
+    _fields_ = [('creation', ctypes.c_int64), ('access', ctypes.c_int64),
+                ('write', ctypes.c_int64), ('change', ctypes.c_int64),
+                ('attributes', wintypes.DWORD)]
+
+
+def file_change_time(stream):
+    """Read native metadata ChangeTime; Python st_ctime is creation time on Windows."""
+    basic = FileBasicInfo()
+    handle = msvcrt.get_osfhandle(stream.fileno())
+    if not _info(handle, FILE_BASIC_INFO_CLASS, ctypes.byref(basic), ctypes.sizeof(basic)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if basic.change <= 0:
+        raise ValueError('Native evidence change time unavailable')
+    return basic.change
 
 
 class FileAttributeTagInfo(ctypes.Structure):
