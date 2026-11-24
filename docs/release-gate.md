@@ -176,3 +176,7 @@ Final checklist:
 - [ ] Explicit release authorization, then merge/tag/publish as authorized.
 
 No automatic merge or release is permitted by this checklist.
+
+## Bounded encrypted private-key preflight (proposed follow-up)
+
+The private-key KDF resource concern in EIKA-03 is partially addressed by a strict outer encrypted PKCS#8 DER profile checked before prompting or invoking the decryption provider. Only PBES2 / PBKDF2-HMAC-SHA256 / AES-256-CBC is supported, with a bounded canonical iteration count (2,048 to 1,000,000), salt (8–64 bytes), optional exact 32-byte key length, IV (16 bytes), and block-aligned ciphertext (16–4,096 bytes). Unknown algorithms and trailing/noncanonical DER are rejected. The provider still decrypts and validates the inner key. This deliberately narrows accepted key formats; exact locked-provider round trips on all six environments and independent parser review are required before integration. The lower limit preserves existing provider-generated key compatibility, not password-strength assurance. External evidence I/O and process-resource isolation remain required. No provider approval or release authorization follows from this change.
