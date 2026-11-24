@@ -45,3 +45,23 @@ jobs:
         run: python -m pip check
       - name: Run signed-manifest tests (required)
         run: python -m unittest discover -s tests_crypto -v
+
+  release-provider-policy:
+    name: Signing provider release gate
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install hash-locked signing dependencies
+        run: >-
+          python -m pip --isolated install --force-reinstall --no-cache-dir --require-hashes --index-url https://pypi.org/simple --only-binary=:all: --report signing-install-report.json -r requirements-signing.txt
+      - name: Verify installed wheel evidence
+        run: python tools/verify_signing_environment.py --report signing-install-report.json --lock requirements-signing.txt
+      - name: Require reviewed signing provider
+        run: python tools/check_release_provider.py
