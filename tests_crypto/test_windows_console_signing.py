@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 CLI = Path(__file__).resolve().parents[1] / 'evidence_integrity.py'
 
 
-def exercise_console(base, wrong_password):
+def exercise_console(base, scenario):
     import ctypes as c
     from ctypes import wintypes as w
     import hashlib
@@ -95,8 +95,8 @@ def exercise_console(base, wrong_password):
             for down in (True, False):
                 item = InputRecord()
                 item.kind = 1  # KEY_EVENT
-                item.event.key = KeyEvent(down, 1, 13 if ch == '\r' else ord(ch.upper()),
-                                          0, ch, 0)
+                vk = 13 if ch == '\r' else (ord('V') if ch == '\x16' else ord(ch.upper()))
+                item.event.key = KeyEvent(down, 1, vk, 0, ch, 8 if ch == '\x16' else 0)
                 records.append(item)
         events = (InputRecord * len(records))(*records)
         actual = w.DWORD()
@@ -114,7 +114,8 @@ def exercise_console(base, wrong_password):
         {'path': 'a.bin', 'sha256': hashlib.sha256(data).hexdigest()}]}).encode('ascii'))
     private, public = base / 'private.pem', base / 'public.pem'
     password = secrets.token_hex(24)
-    entered = secrets.token_hex(24) if wrong_password else password
+    entered = '\x16' if scenario == 'paste-control' else (
+        secrets.token_hex(24) if scenario == 'wrong' else password)
     key = ed25519.Ed25519PrivateKey.generate()
     private.write_bytes(key.private_bytes(ser.Encoding.PEM, ser.PrivateFormat.PKCS8,
                                           ser.BestAvailableEncryption(password.encode('ascii'))))
@@ -150,8 +151,9 @@ def exercise_console(base, wrong_password):
     report = {'sign_exit': code, 'no_echo': entered not in transcript and entered.encode('ascii') not in raw_signature,
               'mode_restored': final_mode.value == original_mode.value,
               'signature_empty': not raw_signature,
-              'unlock_error': 'Unable to unlock encrypted private key' in transcript}
-    if not wrong_password and code == 0:
+              'unlock_error': 'Unable to unlock encrypted private key' in transcript,
+              'paste_error': 'Unexpected paste control character in passphrase;' in transcript}
+    if scenario == 'correct' and code == 0:
         verified = subprocess.run(
             [sys.executable, str(CLI), 'verify-signed', '--root', str(root),
              '--manifest', str(manifest), '--signature', str(signature),
@@ -164,14 +166,14 @@ def exercise_console(base, wrong_password):
 
 @unittest.skipUnless(os.name == 'nt', 'Native Windows console fixture required')
 class WindowsConsoleSigningTests(unittest.TestCase):
-    def run_console(self, wrong):
+    def run_console(self, scenario):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp).resolve()
             # Do not redirect these streams: CREATE_NEW_CONSOLE provides real
             # console handles to this isolated fixture process.
             child = subprocess.Popen(
                 [sys.executable, str(Path(__file__).resolve()), '--console-fixture',
-                 str(base), 'wrong' if wrong else 'correct'],
+                 str(base), scenario],
                 creationflags=subprocess.CREATE_NEW_CONSOLE)
             try:
                 code = child.wait(timeout=65)
@@ -186,24 +188,32 @@ class WindowsConsoleSigningTests(unittest.TestCase):
             return report
 
     def test_native_windows_console_sign_verify_no_echo(self):
-        result = self.run_console(False)
+        result = self.run_console('correct')
         self.assertEqual(result['sign_exit'], 0)
         self.assertFalse(result['signature_empty'])
         self.assertEqual(result['verify_exit'], 0)
         self.assertTrue(result['verified'])
 
     def test_native_windows_console_wrong_passphrase_no_echo(self):
-        result = self.run_console(True)
+        result = self.run_console('wrong')
         self.assertEqual(result['sign_exit'], 2)
         self.assertTrue(result['signature_empty'])
         self.assertTrue(result['unlock_error'])
+
+
+    def test_native_windows_console_paste_control_rejected(self):
+        result = self.run_console('paste-control')
+        self.assertEqual(result['sign_exit'], 2)
+        self.assertTrue(result['signature_empty'])
+        self.assertTrue(result['paste_error'])
+        self.assertFalse(result['unlock_error'])
 
 
 if __name__ == '__main__':
     if len(sys.argv) == 4 and sys.argv[1] == '--console-fixture' and os.name == 'nt':
         directory = Path(sys.argv[2])
         try:
-            result = exercise_console(directory, sys.argv[3] == 'wrong')
+            result = exercise_console(directory, sys.argv[3])
         except Exception as exc:
             # No transcript, password, or exception text containing input.
             result = {'fixture_error_type': type(exc).__name__,

@@ -152,3 +152,18 @@ class KeyLoadingTests(unittest.TestCase):
                 prompt.side_effect = error
                 with self.assertRaisesRegex(ValueError, 'Secure private key passphrase input failed'):
                     keys.prompt_passphrase()
+
+
+    def test_interactive_paste_control_rejected_without_unlock(self):
+        path = self.root / 'private.pem'
+        path.write_bytes(self.private)
+        for phrase in ('\x16', 'prefix\x16suffix'):
+            with self.subTest(length=len(phrase)), \
+                    patch.object(keys.sys.stdin, 'isatty', return_value=True), \
+                    patch.object(keys.sys.stderr, 'isatty', return_value=True), \
+                    patch.object(keys.getpass, 'getpass', return_value=phrase), \
+                    patch.object(keys, '_load_encrypted_private_der') as unlock:
+                with self.assertRaisesRegex(ValueError, '^Unexpected paste control character in passphrase;') as error:
+                    keys.read_private_key(path)
+                self.assertNotIn(phrase, str(error.exception))
+                unlock.assert_not_called()

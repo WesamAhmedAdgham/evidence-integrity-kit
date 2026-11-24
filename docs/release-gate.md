@@ -20,6 +20,10 @@ Audited SHA: `e97eb72328a91266f72b88ee91dd3a0de0e4ad47`. Independent AI review (
 
 Operational acceptance procedure: acquire an externally trusted immutable collection or exclude all writers and namespace changes (including writable aliases) for the full acquisition and comparison interval. Document the filesystem, snapshot/ACL boundary, trusted root ancestors and control storage. Test independent writer and namespace-change attempts using synthetic files in the actual deployment environment; record denied attempts and unchanged digests, then obtain independent review. Never infer snapshot immutability from this CLI's success. Retain the verified snapshot and authenticated manifest in trusted custody if needed. This procedure is a requirement, not proof that a particular environment meets it.
 
+## Owner-observed interactive input regression
+
+At `7e15309348bfb27c29c9ad886fd2848fabe3ebca`, the owner demonstrated with synthetic data that direct PyCA and EIK key loading and signature primitives work, while interactive getpass returned a single U+0016 (Ctrl+V) in two attempts and the exact intended passphrase in another. The CLI now rejects that literal control character before decryption, without echo, secret logging, stripping, or insecure fallback. Added mocked regression coverage and isolated native Windows console coverage. This is a fail-closed diagnostic improvement, not a universal clipboard/paste implementation. Exact-head CI and owner retest remain required. All existing release blockers remain in force.
+
 ## Historical baseline and cumulative review
 
 - Published main: 60654e8265650bf74626198ddd9692acddf8071e.

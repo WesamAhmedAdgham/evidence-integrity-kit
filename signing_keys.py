@@ -101,6 +101,10 @@ def prompt_passphrase():
             password = getpass.getpass('Private key passphrase: ', stream=sys.stderr)
         if not password:
             raise ValueError('Nonempty private key passphrase required')
+        # Windows getpass may return Ctrl+V as literal U+0016 rather
+        # than pasted text. Never strip it or try an altered passphrase.
+        if '\x16' in password:
+            raise ValueError('Unexpected paste control character in passphrase; type it manually or use a terminal paste command that inserts text')
         return password.encode('utf-8')
     except (getpass.GetPassWarning, EOFError, OSError, UnicodeError, KeyboardInterrupt):
         raise ValueError('Secure private key passphrase input failed') from None
