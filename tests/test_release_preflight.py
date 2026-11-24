@@ -51,8 +51,8 @@ class ReleasePreflightTests(unittest.TestCase):
             resolve.assert_not_called()
 
     def test_cli_resolve_runtime_error_is_controlled(self):
-        for args in (['create', '--root', 'unused', 'a'],
-                     ['verify', '--root', 'unused', '--manifest', 'unused.json']):
+        for args in (['create', '--assume-stable-tree', '--root', 'unused', 'a'],
+                     ['verify', '--assume-stable-tree', '--root', 'unused', '--manifest', 'unused.json']):
             with self.subTest(args=args), patch.object(Path, 'resolve', side_effect=RuntimeError(
                     'Symlink loop')), patch.object(kit, 'load_manifest', return_value=manifest(['a'])):
                 out, err = io.StringIO(), io.StringIO()
@@ -70,8 +70,8 @@ class ReleasePreflightTests(unittest.TestCase):
             loop.symlink_to('loop')
             control = root / 'manifest.json'
             control.write_text(json.dumps(manifest(['a'])), encoding='utf-8')
-            for args in (['create', '--root', str(loop), 'a'],
-                         ['verify', '--root', str(loop), '--manifest', str(control)]):
+            for args in (['create', '--assume-stable-tree', '--root', str(loop), 'a'],
+                         ['verify', '--assume-stable-tree', '--root', str(loop), '--manifest', str(control)]):
                 with self.subTest(args=args):
                     out, err = io.StringIO(), io.StringIO()
                     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

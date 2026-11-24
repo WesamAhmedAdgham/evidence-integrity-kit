@@ -56,7 +56,7 @@ class ManifestIOTests(unittest.TestCase):
 
     def test_oversized_cli_rejects_without_stdout(self):
         self.path.write_bytes(b'{}' + b' ' * (MAX_MANIFEST_BYTES - 1))
-        code, out, err = self.run_main(['verify', '--root', str(self.root), '--manifest', str(self.path)])
+        code, out, err = self.run_main(['verify', '--assume-stable-tree', '--root', str(self.root), '--manifest', str(self.path)])
         self.assertEqual((code, out), (2, ''))
         self.assertIn('byte limit', err)
 
@@ -72,7 +72,7 @@ class ManifestIOTests(unittest.TestCase):
                 load_manifest(self.path)
 
     def test_create_portable_size_boundary(self):
-        args = ['create', '--root', str(self.root), 'a.txt']
+        args = ['create', '--assume-stable-tree', '--root', str(self.root), 'a.txt']
         code, out, err = self.run_main(args)
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(json.loads(out)['files'][0]['path'], 'a.txt')
