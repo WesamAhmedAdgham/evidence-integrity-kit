@@ -1,11 +1,12 @@
 """Native Windows junction substitution after path validation; synthetic data."""
 import os
 import stat
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from native_fixture_support import junction_fixture, link_fixture
 
 import evidence_integrity as kit
 
@@ -33,10 +34,7 @@ class WindowsDescendantTests(unittest.TestCase):
             self.parent.rename(self.moved)
         except OSError as exc:
             raise AssertionError('Fixture parent rename failed') from exc
-        result = subprocess.run(
-            ['cmd.exe', '/d', '/c', 'mklink', '/J', str(self.parent), str(self.moved)],
-            capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, repr(result.stdout + result.stderr))
+        junction_fixture(self, self.parent, self.moved)
         self.addCleanup(os.rmdir, self.parent)
         self.assertTrue(self.parent.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
         self.assertTrue(os.path.samestat(self.original, path.stat()))
@@ -70,7 +68,7 @@ class WindowsDescendantTests(unittest.TestCase):
 
         def substitute(path, *args, **kwargs):
             self.path.rename(target)
-            self.path.symlink_to(target)
+            link_fixture(self, 'symlink', lambda: self.path.symlink_to(target))
             self.assertTrue(self.path.is_symlink())
             self.assertTrue(os.path.samestat(self.original, self.path.stat()))
             self.substituted = True
