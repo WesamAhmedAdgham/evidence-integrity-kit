@@ -32,9 +32,16 @@ The owner did not accept the existing partial TOCTOU protection. EIK-R05/EIKA-02
 
 The Linux x86-64 Btrfs candidate checks a trusted externally supplied snapshot UUID, actual root-owned read-only subvolume and descriptor-derived scope, strict openat2 traversal and same-object reads. Native synthetic fixture must verify ordinary writer denial, live-source mutation isolation, read-only bind mount rejection and mount crossing. No implicit privileged snapshot creation in the application. The macOS arm64 APFS candidate adds native descriptor statfs checks for snapshot/read-only/local/nodev flags, root mount owner, expected source, exact mounted root and matching descendant scope. Both providers require actual signed CLI fixture tests; macOS SDK ABI and synthetic APFS positive/negative fixture must pass. Independent acceptance remains open. Require exact-head CI and do not claim comprehensive TOCTOU closure.
 
+## Reconciliation after unsigned-core merge
+
+PR #21 was merged with all twelve required checks passing for the pinned unsigned-only payload. The six provider-named checks there reported NOT_APPLICABLE, never provider approval. This signed candidate restores the full hash-locked provider gate in those same contexts; the unsigned-only gate and its two test modules are intentionally retired here because they prohibit any signing modules. All common unsigned regression files match the merged main byte-for-byte. Retain the historical [scope record](unsigned-core-split.md) and Git history. The protected main ruleset remains active with no bypass actors. The owner deferred the final security review, not the final acceptance requirement.
+
+Native APFS setup at 5cb4d35 failed before snapshot creation: hdiutil rejected `-format UDRW` without a source. Use the documented blank-image `-type UDIF` option; native positive and negative fixture remains mandatory. Verify the actual subsequent logs before claiming remediation.
+
 ## Historical baseline and cumulative review
 
-- Published main: 60654e8265650bf74626198ddd9692acddf8071e.
+- Original published baseline: 60654e8265650bf74626198ddd9692acddf8071e.
+- Current merged unsigned-core baseline: 5f1c01439e3d65a635a164507e92fcf8f68a695f (PR #21, owner-authorized incremental merge; not a production approval).
 - Native-verified consolidated baseline: 38a53a9c499041affc7f385b028ffc6a30ad1f2f.
 - PR #20 run 45309934294: 205 methods, 1108 passes, 122 explained
   platform skips, zero failures in six native environments; all ten wheel
@@ -100,8 +107,8 @@ wheels, verifies their installation report, and runs
 `tools/check_release_provider.py`. It intentionally rejects OpenSSL 4.0.x
 before 4.0.4 and denies every provider pair not explicitly reviewed and
 allowlisted. The allowlist is empty pending independent review. This is a
-visible CI policy check, not configured branch protection or independent
-approval; repository owners must make it required before permitting release.
+mandatory CI policy check under the active main ruleset 27955931, not independent
+approval. Do not relax or replace it for the signed candidate.
 Functional CI remains separate and can succeed while the release gate fails.
 See https://pypi.org/project/cryptography/ for upstream release status.
 

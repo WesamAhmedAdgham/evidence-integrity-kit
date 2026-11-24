@@ -28,7 +28,8 @@ int main(void) { return 0; }
 EOF
 cc "$base/abi.c" -o "$base/abi"
 "$base/abi"
-hdiutil create -size 256m -fs APFS -volname EIKFixture -format UDRW "$image"
+# Blank images use -type, not the source-conversion -format option.
+hdiutil create -size 256m -fs APFS -volname EIKFixture -type UDIF "$image"
 hdiutil attach -plist -nobrowse -owners on -mountpoint "$live" "$image" > "$base/attach.plist"
 attached=1
 device="$(python -c 'import plistlib,sys; data=plistlib.load(open(sys.argv[1],"rb")); print(next(e["dev-entry"] for e in data["system-entities"] if e.get("mount-point")==sys.argv[2]))' "$base/attach.plist" "$live")"
