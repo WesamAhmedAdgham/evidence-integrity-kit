@@ -76,13 +76,32 @@ def evidence_path(root, name):
     return path, metadata
 
 
+def sample_directory_chain(root, name):
+    """Sample every descendant directory identity, excluding the separately pinned root."""
+    path = root
+    identities = []
+    for part in validate_relative_path(name)[:-1]:
+        path = path / part
+        metadata = path.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or not metadata.st_ino or
+                getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError(f'Evidence directory identity unavailable or invalid: {name!r}')
+        identities.append((metadata.st_dev, metadata.st_ino))
+    return tuple(identities)
+
+
+def check_directory_chain(root, name, expected):
+    if sample_directory_chain(root, name) != expected:
+        raise ValueError(f'Evidence path changed: directory identity changed: {name!r}')
+
+
 def check_root_identity(root, root_fd):
     if os.name == 'nt':
         from windows_root import check_windows_root
         check_windows_root(root, root_fd)
         return
     if root_fd is None:
-        return
+        raise ValueError('Evidence root descriptor required')
     expected = os.fstat(root_fd)
     current = root.lstat()
     if (not stat.S_ISDIR(current.st_mode) or not expected.st_ino or
@@ -98,8 +117,7 @@ def pinned_root(root):
             yield guard
         return
     if os.name != 'posix':
-        yield None
-        return
+        raise ValueError('Secure evidence opening unavailable on this platform')
     if (os.open not in os.supports_dir_fd or
             not all(hasattr(os, flag) for flag in ('O_DIRECTORY', 'O_NOFOLLOW', 'O_NONBLOCK'))):
         raise ValueError('Secure relative evidence opening unavailable on this POSIX platform')
@@ -140,6 +158,8 @@ def open_evidence(path, *, root=None, name=None, root_fd=None):
         from windows_root import guarded_windows_file
         check_root_identity(root, root_fd)
         return guarded_windows_file(root, validate_relative_path(name), root_fd)
+    if root is not None:
+        raise ValueError('Secure evidence opening unavailable on this platform')
     return path.open('rb')
 
 
@@ -188,6 +208,7 @@ def register_identity(metadata, name, identities):
 
 
 def digest(path, expected, *, root, name, root_fd):
+    directories = sample_directory_chain(root, name)
     with open_evidence(path, root=root, name=name, root_fd=root_fd) as stream:
         before = os.fstat(stream.fileno())
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
@@ -196,6 +217,7 @@ def digest(path, expected, *, root, name, root_fd):
             raise ValueError(f'Opened evidence is not a regular single-link file: {path.name!r}')
         if content_metadata_changed(expected, before):
             raise ValueError(f'Evidence changed before hashing: {name!r}')
+        check_directory_chain(root, name, directories)
         reader = SizedEvidenceReader(stream, before.st_size)
         result = hashlib.file_digest(reader, 'sha256').hexdigest()
         if reader.remaining or not reader.eof_checked:
@@ -210,6 +232,7 @@ def digest(path, expected, *, root, name, root_fd):
             raise ValueError(f'Evidence path changed during hashing: {name!r}')
         if content_metadata_changed(after, current):
             raise ValueError(f'Evidence changed after hashing: {name!r}')
+        check_directory_chain(root, name, directories)
         return result
 
 
@@ -241,13 +264,16 @@ def generate(root, names):
     with pinned_root(root) as root_fd:
         for name in sorted(names):
             check_root_identity(root, root_fd)
+            directories = sample_directory_chain(root, name)
             path, expected = evidence_path(root, name)
             register_identity(expected, name, identities)
             value = digest(path, expected, root=root, name=name, root_fd=root_fd)
+            check_directory_chain(root, name, directories)
             files.append({'path': name, 'sha256': value})
-            processed.append((name, expected))
-        for name, expected in processed:
+            processed.append((name, expected, directories))
+        for name, expected, directories in processed:
             revalidate_processed_file(root, name, expected, root_fd)
+            check_directory_chain(root, name, directories)
     return {'version': 1, 'algorithm': 'sha256', 'files': files}
 
 
@@ -290,19 +316,22 @@ def verify(root, manifest):
         for name, expected_digest in validated:
             check_root_identity(root, root_fd)
             try:
+                directories = sample_directory_chain(root, name)
                 path, expected = evidence_path(root, name)
                 register_identity(expected, name, identities)
                 value = digest(path, expected, root=root, name=name, root_fd=root_fd)
+                check_directory_chain(root, name, directories)
                 status = 'match' if value == expected_digest else 'mismatch'
             except (OSError, ValueError) as exc:
                 results.append({'path': name, 'status': 'error', 'detail': str(exc)})
             else:
                 if status == 'match':
-                    processed.append((len(results), name, expected))
+                    processed.append((len(results), name, expected, directories))
                 results.append({'path': name, 'status': status})
-        for index, name, expected in processed:
+        for index, name, expected, directories in processed:
             try:
                 revalidate_processed_file(root, name, expected, root_fd)
+                check_directory_chain(root, name, directories)
             except (OSError, ValueError) as exc:
                 results[index] = {'path': name, 'status': 'error', 'detail': str(exc)}
     return {'ok': all(r['status'] == 'match' for r in results), 'files': results}
