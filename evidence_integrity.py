@@ -66,6 +66,12 @@ def open_evidence(path):
     return path.open('rb')
 
 
+def content_metadata_changed(first, second):
+    # Compare only size and mtime across pathname and descriptor samples;
+    # other stat fields may have platform-dependent representations.
+    return (first.st_size, first.st_mtime_ns) != (second.st_size, second.st_mtime_ns)
+
+
 def digest(path, expected, *, root, name):
     with open_evidence(path) as stream:
         before = os.fstat(stream.fileno())
@@ -73,6 +79,8 @@ def digest(path, expected, *, root, name):
             raise ValueError(f'Evidence identity changed or unavailable: {path.name!r}')
         if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
             raise ValueError(f'Opened evidence is not a regular single-link file: {path.name!r}')
+        if content_metadata_changed(expected, before):
+            raise ValueError(f'Evidence changed before hashing: {name!r}')
         result = hashlib.file_digest(stream, 'sha256').hexdigest()
         after = os.fstat(stream.fileno())
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
@@ -81,6 +89,8 @@ def digest(path, expected, *, root, name):
         _, current = evidence_path(root, name)
         if not current.st_ino or not os.path.samestat(after, current):
             raise ValueError(f'Evidence path changed during hashing: {name!r}')
+        if content_metadata_changed(after, current):
+            raise ValueError(f'Evidence changed after hashing: {name!r}')
         return result
 
 
@@ -154,6 +164,8 @@ def load_manifest(path):
             raise ValueError('Manifest must be a regular file')
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
             raise ValueError('Manifest identity changed or unavailable')
+        if content_metadata_changed(expected, before):
+            raise ValueError('Manifest changed before reading')
         raw = stream.read(MAX_MANIFEST_BYTES + 1)
         after = os.fstat(stream.fileno())
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
@@ -162,6 +174,8 @@ def load_manifest(path):
         current = path.stat()
         if not current.st_ino or not os.path.samestat(after, current):
             raise ValueError('Manifest path changed during reading')
+        if content_metadata_changed(after, current):
+            raise ValueError('Manifest changed after reading')
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
     try:
