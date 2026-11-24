@@ -24,6 +24,11 @@ FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
 FILE_ID_INFO_CLASS = 18
 VOLUME_NAME_GUID = 0x1
 FILE_NAME_OPENED = 0x8
+SYNCHRONIZE = 0x00100000
+OBJ_CASE_INSENSITIVE = 0x40
+NT_FILE_OPEN = 1
+FILE_SYNCHRONOUS_IO_NONALERT = 0x20
+NT_FILE_OPEN_REPARSE_POINT = 0x00200000
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
@@ -76,6 +81,115 @@ _volume_info.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
 _volume_info.restype = wintypes.BOOL
 
 
+class UnicodeString(ctypes.Structure):
+    _fields_ = [('Length', wintypes.USHORT), ('MaximumLength', wintypes.USHORT),
+                ('Buffer', wintypes.LPWSTR)]
+
+
+class ObjectAttributes(ctypes.Structure):
+    _fields_ = [('Length', wintypes.ULONG), ('RootDirectory', wintypes.HANDLE),
+                ('ObjectName', ctypes.POINTER(UnicodeString)), ('Attributes', wintypes.ULONG),
+                ('SecurityDescriptor', ctypes.c_void_p), ('SecurityQualityOfService', ctypes.c_void_p)]
+
+
+class IoStatusBlock(ctypes.Structure):
+    # The first member is a union of NTSTATUS and a pointer.
+    _fields_ = [('StatusOrPointer', ctypes.c_void_p), ('Information', ctypes.c_size_t)]
+
+
+def relative_handle(parent, part, *, directory):
+    """Open exactly one validated component relative to a held directory.
+
+    No absolute path fallback. A type-neutral no-follow open is checked
+    before transferring ownership or reading file content.
+    """
+    from evidence_integrity import validate_relative_path
+    if validate_relative_path(part) != [part]:
+        raise ValueError('Native relative open requires exactly one component')
+    directory_identity(parent)
+    encoded = part.encode('utf-16-le')
+    if len(encoded) > 510:
+        raise ValueError('Native relative component exceeds NTFS name limit')
+    buffer = ctypes.create_unicode_buffer(part)
+    name = UnicodeString(len(encoded), len(encoded) + 2,
+                         ctypes.cast(buffer, wintypes.LPWSTR))
+    attrs = ObjectAttributes(ctypes.sizeof(ObjectAttributes), parent,
+                             ctypes.pointer(name), OBJ_CASE_INSENSITIVE, None, None)
+    ios = IoStatusBlock()
+    out = wintypes.HANDLE()
+    # Load this optional native entry point only in explicitly guarded mode.
+    try:
+        nt = ctypes.WinDLL('ntdll')
+        create = nt.NtCreateFile
+        convert = nt.RtlNtStatusToDosError
+    except (AttributeError, OSError):
+        raise ValueError('Native relative evidence opening unavailable') from None
+    create.argtypes = [ctypes.POINTER(wintypes.HANDLE), wintypes.ULONG,
+                       ctypes.POINTER(ObjectAttributes), ctypes.POINTER(IoStatusBlock),
+                       ctypes.c_void_p, wintypes.ULONG, wintypes.ULONG, wintypes.ULONG,
+                       wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG]
+    create.restype = wintypes.LONG
+    convert.argtypes, convert.restype = [wintypes.LONG], wintypes.ULONG
+    access = (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES if directory else GENERIC_READ) | SYNCHRONIZE
+    status = create(ctypes.byref(out), access, ctypes.byref(attrs), ctypes.byref(ios),
+                    None, 0, FILE_SHARE_READ, NT_FILE_OPEN,
+                    FILE_SYNCHRONOUS_IO_NONALERT | NT_FILE_OPEN_REPARSE_POINT, None, 0)
+    if status != 0:
+        if status > 0 and out.value not in (None, INVALID_HANDLE_VALUE):
+            _close(out)
+        raise ctypes.WinError(convert(status))
+    if out.value in (None, INVALID_HANDLE_VALUE):
+        raise ValueError('Native relative evidence handle unavailable')
+    handle = out.value
+    try:
+        if directory:
+            directory_identity(handle)
+        else:
+            checked_leaf_identity(handle)
+        return handle
+    except BaseException:
+        _close(handle)
+        raise
+
+
+@contextmanager
+def relative_directory(parent, part):
+    handle = relative_handle(parent, part, directory=True)
+    try:
+        yield handle
+    finally:
+        if not _close(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+
+def checked_leaf_identity(handle):
+    attributes = FileAttributeTagInfo()
+    if _file_type(handle) != FILE_TYPE_DISK:
+        raise ValueError('Evidence must be a disk file')
+    if not _info(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS, ctypes.byref(attributes), ctypes.sizeof(attributes)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if attributes.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError('Evidence leaf must be a regular file without reparse points')
+    return native_file_identity(handle), attributes.attributes
+
+
+@contextmanager
+def relative_leaf(parent, part):
+    handle = relative_handle(parent, part, directory=False)
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+    except BaseException:
+        _close(handle)
+        raise
+    try:
+        stream = os.fdopen(fd, 'rb')
+    except BaseException:
+        os.close(fd)
+        raise
+    with stream:
+        yield stream
+
+
 def local_ntfs_scope(handle):
     """Conservatively require a local NTFS volume GUID on the actual handle."""
     fs = ctypes.create_unicode_buffer(32)
@@ -109,7 +223,8 @@ def directory_handle(path, *, deny_write=False):
     # Request directory listing access, not just attributes, so the handle
     # participates in sharing checks. Deliberately omit FILE_SHARE_DELETE.
     share = FILE_SHARE_READ if deny_write else FILE_SHARE_READ | FILE_SHARE_WRITE
-    handle = _create(os.fspath(path), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+    access = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | (SYNCHRONIZE if deny_write else 0)
+    handle = _create(os.fspath(path), access,
                      share, None, OPEN_EXISTING,
                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
     if handle == INVALID_HANDLE_VALUE or handle is None:
@@ -212,21 +327,22 @@ def checked_file_fd(path, flags, *, deny_write=False):
 def guarded_windows_file(root, parts, guard, *, deny_write=False, volume_scope=None):
     """Hold checked directory handles while opening and reading one leaf.
 
-    This uses absolute Win32 paths with pinned prefixes, not NT
-    RootDirectory-relative opens. Callers must supply validated components.
+    Guarded mode uses NT RootDirectory-relative opens for descendants;
+    compatibility mode retains absolute Win32 opens. Callers validate names.
     """
     if deny_write and volume_scope is None:
         raise ValueError('Windows deny-write volume scope required')
+    if deny_write:
+        with relative_guarded_file(root, parts, guard, volume_scope) as stream:
+            yield stream
+        return
     check_windows_root(root, guard)
     with ExitStack() as stack:
         directories = []
         path = root
         for part in parts[:-1]:
             path = path / part
-            context = directory_handle(path, deny_write=True) if deny_write else directory_handle(path)
-            handle = stack.enter_context(context)
-            if deny_write and local_ntfs_scope(handle) != volume_scope:
-                raise ValueError('Guarded evidence directory crosses local NTFS volume')
+            handle = stack.enter_context(directory_handle(path))
             directories.append((path, handle, directory_identity(handle)))
 
         def check_directories():
@@ -239,10 +355,52 @@ def guarded_windows_file(root, parts, guard, *, deny_write=False, volume_scope=N
                         raise ValueError('Evidence directory identity changed')
 
         check_directories()
-        opener = (lambda leaf, flags: checked_file_fd(leaf, flags, deny_write=True)) if deny_write else checked_file_fd
-        with open(path / parts[-1], 'rb', opener=opener) as stream:
-            if deny_write and local_ntfs_scope(msvcrt.get_osfhandle(stream.fileno())) != volume_scope:
-                raise ValueError('Guarded evidence leaf crosses local NTFS volume')
+        with open(path / parts[-1], 'rb', opener=checked_file_fd) as stream:
             check_directories()
             yield stream
             check_directories()
+
+
+
+@contextmanager
+def relative_guarded_file(root, parts, guard, volume_scope):
+    """Retain native parent handles; recheck each edge relative to its parent."""
+    check_windows_root(root, guard)
+    with ExitStack() as stack:
+        parent = guard[0]
+        directories = []
+        for part in parts[:-1]:
+            handle = stack.enter_context(relative_directory(parent, part))
+            if local_ntfs_scope(handle) != volume_scope:
+                raise ValueError('Guarded evidence directory crosses local NTFS volume')
+            directories.append((parent, part, handle, directory_identity(handle)))
+            parent = handle
+
+        def check_edges():
+            check_windows_root(root, guard)
+            for ancestor, part, handle, expected in directories:
+                if directory_identity(handle) != expected:
+                    raise ValueError('Guarded evidence directory identity changed')
+                with relative_directory(ancestor, part) as current:
+                    if directory_identity(current) != expected:
+                        raise ValueError('Guarded evidence relative directory changed')
+
+        check_edges()
+        with relative_leaf(parent, parts[-1]) as stream:
+            held = msvcrt.get_osfhandle(stream.fileno())
+            if local_ntfs_scope(held) != volume_scope:
+                raise ValueError('Guarded evidence leaf crosses local NTFS volume')
+            expected = checked_leaf_identity(held)
+
+            def check_leaf():
+                if checked_leaf_identity(held) != expected:
+                    raise ValueError('Guarded evidence leaf identity changed')
+                with relative_leaf(parent, parts[-1]) as current:
+                    if checked_leaf_identity(msvcrt.get_osfhandle(current.fileno())) != expected:
+                        raise ValueError('Guarded evidence relative leaf changed')
+
+            check_edges()
+            check_leaf()
+            yield stream
+            check_edges()
+            check_leaf()

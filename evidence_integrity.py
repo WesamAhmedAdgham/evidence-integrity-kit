@@ -466,7 +466,8 @@ def verify(root, manifest, *, deny_write=False):
         results = [{'path': name, 'status': 'match' if value == expected else 'mismatch'}
                    for (name, expected), value in zip(validated, values)]
         return {'ok': all(r['status'] == 'match' for r in results), 'files': results,
-                'protection': {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles'}}
+                'protection': {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles',
+                               'traversal': 'native-relative-descendants'}}
     results = []
     processed = []
     identities = {}

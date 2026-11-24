@@ -212,3 +212,58 @@ else:
             digest.assert_not_called()
         self.assertEqual(len(calls), 2)
         self.assertTrue(kit.verify(self.root, self.manifest, deny_write=True)['ok'])
+
+
+    def test_guarded_relative_opens_never_use_absolute_descendant_open(self):
+        import windows_root as native
+        real_dir = native.directory_handle
+        from contextlib import contextmanager
+
+        @contextmanager
+        def root_only(path, **kwargs):
+            self.assertEqual(Path(path), self.root)
+            with real_dir(path, **kwargs) as handle:
+                yield handle
+
+        with patch.object(native, 'directory_handle', side_effect=root_only), \
+                patch.object(native, 'checked_file_fd', side_effect=AssertionError('absolute leaf open')), \
+                patch.object(native, 'relative_handle', wraps=native.relative_handle) as relative:
+            report = kit.verify(self.root, self.manifest, deny_write=True)
+        self.assertTrue(report['ok'])
+        self.assertEqual(report['protection']['traversal'], 'native-relative-descendants')
+        self.assertIn('nested', [call.args[1] for call in relative.call_args_list])
+        self.assertIn('a', [call.args[1] for call in relative.call_args_list])
+
+    def test_relative_open_rejects_invalid_components(self):
+        import windows_root as native
+        with native.pinned_windows_root(self.root, deny_write=True) as guard:
+            for part in ('', '.', '..', 'nested/a', 'nested\\a', 'C:a', 'a:stream', 'a\x00'):
+                with self.subTest(part=part):
+                    with self.assertRaises(ValueError):
+                        native.relative_handle(guard[0], part, directory=False)
+
+    def test_relative_open_rejects_junction_and_leaf_symlink(self):
+        import windows_root as native
+        from native_fixture_support import junction_fixture, link_fixture
+        junction = self.root / 'junction'
+        link = self.root / 'link'
+        junction_fixture(self, junction, self.parent)
+        self.addCleanup(os.rmdir, junction)
+        link_fixture(self, 'symlink', lambda: link.symlink_to(self.a))
+        self.addCleanup(link.unlink)
+        with native.pinned_windows_root(self.root, deny_write=True) as guard:
+            with self.assertRaises((OSError, ValueError)):
+                with native.relative_directory(guard[0], 'junction'):
+                    self.fail('Junction opened')
+            with self.assertRaises((OSError, ValueError)):
+                with native.relative_leaf(guard[0], 'link'):
+                    self.fail('Symlink opened')
+        self.assertTrue(kit.verify(self.root, self.manifest, deny_write=True)['ok'])
+
+    def test_relative_open_supports_utf16_non_bmp_and_binary_data(self):
+        name = 'nested/caf\u00e9-\U0001f600.bin'
+        data = b'\x00\x1a\r\n\xff'
+        (self.root / name).write_bytes(data)
+        manifest = kit.generate(self.root, [name], deny_write=True)
+        self.assertEqual(manifest['files'][0]['sha256'], hashlib.sha256(data).hexdigest())
+        self.assertTrue(kit.verify(self.root, manifest, deny_write=True)['ok'])
