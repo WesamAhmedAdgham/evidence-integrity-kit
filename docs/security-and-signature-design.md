@@ -111,7 +111,7 @@ unsupported crypto must fail closed, never degrade to unsigned verification.
 ## 3. Command semantics
 
     python evidence_integrity.py sign --manifest manifest.json --private-key signer.pem
-    python evidence_integrity.py verify-signed --root evidence --manifest manifest.json --signature manifest.sig --public-key trusted.pem
+    python evidence_integrity.py verify-signed --assume-stable-tree --root evidence --manifest manifest.json --signature manifest.sig --public-key trusted.pem
 
 The first command prints the detached hex signature to stdout on success.
 Users may save stdout in a trusted location using a byte/ASCII-preserving

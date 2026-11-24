@@ -87,7 +87,7 @@ class InteractiveSigningTests(unittest.TestCase):
         signature = self.base / 'manifest.sig'
         signature.write_bytes(out)
         result = subprocess.run(
-            [sys.executable, str(CLI), 'verify-signed', '--root', str(self.root),
+            [sys.executable, str(CLI), 'verify-signed', '--assume-stable-tree', '--root', str(self.root),
              '--manifest', str(self.manifest), '--signature', str(signature),
              '--public-key', str(self.public)], capture_output=True, timeout=15)
         self.assertEqual(result.returncode, 0)

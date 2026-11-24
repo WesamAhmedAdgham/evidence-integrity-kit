@@ -50,6 +50,10 @@ Reference: https://man.freebsd.org/cgi/man.cgi?query=fs_snapshot_create&sektion=
 
 Guarded mode no longer resolves the supplied root through junctions before acquisition. The candidate restricts the root to a bounded ordinary local drive-letter path, checks the actual anchor is a volume root, retains each ancestor via single-component native relative opens, and omits delete sharing throughout. Ancestors allow ordinary writes; the final evidence root denies writes. Reject reparse points and cross-volume scope, recheck native edges and sample current drive/root identity. Native tests for root junction rejection, ancestor rename exclusion and ambiguous root rejection are mandatory. This does not guarantee that metadata-only or privileged namespace changes are impossible. Exact-head verification and independent review remain required.
 
+## Explicit CLI assurance selection
+
+The candidate requires exactly one protection option for create, verify and verify-signed. An explicit --assume-stable-tree assertion selects compatibility sampling; its CLI report states isolation_verified=false. Absence or conflicting modes fails at argument parsing before control or evidence reads. This prevents accidental omission of the protection flag, not deliberate selection of an inappropriate mode. Native requests retain fail-closed behavior, and manifest/signature formats and the legacy Python API remain unchanged. Existing CLI tests explicitly select the stable-tree mode where appropriate; native tests retain native flags. Require exact-head verification and owner review.
+
 ## Historical baseline and cumulative review
 
 - Original published baseline: 60654e8265650bf74626198ddd9692acddf8071e.

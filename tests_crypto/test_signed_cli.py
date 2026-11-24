@@ -50,7 +50,7 @@ class SignedCLITests(unittest.TestCase):
         self.signature.write_bytes(sig.sign_manifest_bytes(self.raw, self.key))
         self.sign_args = ['sign', '--manifest', str(self.manifest),
                           '--private-key', str(self.private)]
-        self.verify_args = ['verify-signed', '--root', str(self.root),
+        self.verify_args = ['verify-signed', '--assume-stable-tree', '--root', str(self.root),
                             '--manifest', str(self.manifest), '--signature',
                             str(self.signature), '--public-key', str(self.public)]
 
@@ -189,16 +189,18 @@ class SignedCLITests(unittest.TestCase):
         self.assertEqual((result.returncode, result.stdout), (2, ''))
         self.assertIn('Interactive non-echoing terminal', result.stderr)
 
-    def test_unsigned_report_unchanged(self):
-        code, out, err = self.run_main(['verify', '--root', str(self.root),
+    def test_unsigned_report_identifies_assumed_stable_tree(self):
+        code, out, err = self.run_main(['verify', '--assume-stable-tree', '--root', str(self.root),
                                        '--manifest', str(self.manifest)])
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(json.loads(out), {'ok': True,
-                         'files': [{'path': self.name, 'status': 'match'}]})
+                         'files': [{'path': self.name, 'status': 'match'}],
+                         'protection': {'mode': 'assumed-stable-tree', 'isolation_verified': False,
+                                        'scope': 'sampled-checks-only'}})
 
 
     def test_guarded_signed_cli_never_downgrades(self):
-        args = self.verify_args + ['--windows-deny-write']
+        args = [x for x in self.verify_args if x != '--assume-stable-tree'] + ['--windows-deny-write']
         code, out, err = self.run_main(args)
         if os.name == 'nt':
             self.assertEqual((code, err), (0, ''))
@@ -219,7 +221,7 @@ class SignedCLITests(unittest.TestCase):
         self.manifest.write_bytes(self.raw + b' ')
         with patch.object(kit, 'windows_guarded_digests') as acquire, \
                 patch.object(kit, 'verify') as verify:
-            self.assert_failure(self.run_main(self.verify_args + ['--windows-deny-write']),
+            self.assert_failure(self.run_main([x for x in self.verify_args if x != '--assume-stable-tree'] + ['--windows-deny-write']),
                                 'signature invalid')
             verify.assert_not_called()
             acquire.assert_not_called()

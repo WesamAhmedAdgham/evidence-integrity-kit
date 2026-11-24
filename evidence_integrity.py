@@ -688,7 +688,9 @@ def main(argv=None):
     signed.add_argument('--signature', required=True, type=Path)
     signed.add_argument('--public-key', required=True, type=Path)
     for command in (create, check, signed):
-        protection = command.add_mutually_exclusive_group()
+        protection = command.add_mutually_exclusive_group(required=True)
+        protection.add_argument('--assume-stable-tree', action='store_true',
+                                help='Explicitly assert externally stable evidence; sampled checks only, no isolation proof')
         protection.add_argument('--windows-deny-write', action='store_true',
                                 help='Hold all listed Windows file handles without write/delete sharing; fail closed')
         protection.add_argument('--linux-btrfs-snapshot', metavar='UUID',
@@ -720,6 +722,10 @@ def main(argv=None):
                       if args.windows_deny_write or args.linux_btrfs_snapshot is not None or args.macos_apfs_snapshot is not None else
                       verify(args.root, manifest))
             code = 0 if result['ok'] else 1
+        if args.command in ('verify', 'verify-signed') and args.assume_stable_tree:
+            result['protection'] = {'mode': 'assumed-stable-tree',
+                                    'isolation_verified': False,
+                                    'scope': 'sampled-checks-only'}
         output = json.dumps(result, indent=2, ensure_ascii=True)
         # ASCII serialization; allow for CRLF translation on Windows, including the final newline.
         if args.command == 'create' and len(output) + output.count('\n') + 2 > MAX_MANIFEST_BYTES:

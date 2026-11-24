@@ -155,7 +155,7 @@ def exercise_console(base, scenario):
               'paste_error': 'Unexpected paste control character in passphrase;' in transcript}
     if scenario == 'correct' and code == 0:
         verified = subprocess.run(
-            [sys.executable, str(CLI), 'verify-signed', '--root', str(root),
+            [sys.executable, str(CLI), 'verify-signed', '--assume-stable-tree', '--root', str(root),
              '--manifest', str(manifest), '--signature', str(signature),
              '--public-key', str(public)], capture_output=True, timeout=15)
         report['verify_exit'] = verified.returncode

@@ -55,11 +55,11 @@ with tempfile.TemporaryDirectory() as temp:
                        b'\\n-----END PUBLIC KEY-----\\n')
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        assert kit.main(['verify', '--root', str(root), '--manifest', str(manifest)]) == 0
+        assert kit.main(['verify', '--assume-stable-tree', '--root', str(root), '--manifest', str(manifest)]) == 0
     assert json.loads(out.getvalue())['ok']
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        assert kit.main(['verify-signed', '--root', str(root), '--manifest', str(manifest),
+        assert kit.main(['verify-signed', '--assume-stable-tree', '--root', str(root), '--manifest', str(manifest),
                          '--signature', str(signature), '--public-key', str(public)]) == 2
     assert not out.getvalue()
     assert 'provider unavailable' in err.getvalue(), err.getvalue()
