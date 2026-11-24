@@ -7,14 +7,18 @@ audit evidence or an owner sign-off.
 ## Baseline and cumulative review
 
 - Published main: 60654e8265650bf74626198ddd9692acddf8071e.
-- Last native-verified baseline: b060e1803e8b9fded822b8dc5f26bc666fe354e6.
+- Native-verified consolidated baseline: 38a53a9c499041affc7f385b028ffc6a30ad1f2f.
+- PR #20 run 45309934294: 205 methods, 1108 passes, 122 explained
+  platform skips, zero failures in six native environments; all ten wheel
+  hashes observed and linked OpenSSL 4.0.3 reported by every job.
 - PR #19, run 45309485624: 193 test methods; 1040 passes and 118 explained
   platform skips across six native environments, zero failures.
 - This consolidated candidate includes all preceding stacked changes and
   adds directory identity checks, unsupported-platform rejection, actual
   pip installation-report validation and runtime provider inventory.
-  Twelve additional methods are defined (205 total); verify the exact
-  candidate commit and logs before recording any pass.
+  The subsequent delta adds actual POSIX opened-directory identity checks,
+  a 128-component bound, and a fail-closed release-provider policy check.
+  Verify the exact new commit and logs before recording any pass.
 - Review the cumulative PR diff against main, not only the latest delta.
   License stays MIT; all test data must be synthetic.
 
@@ -59,7 +63,19 @@ The exact wheel hash policy and successful prior native installs are
 evidence of reproducibility, not independent publisher authentication.
 The new CI check must verify the actual install report for all three
 distributions and log the linked provider. Independent provenance review
-and current advisories for all dependencies remain open.
+and current advisories for all dependencies remain open. As of 2026-11-24,
+PyPI and the stable upstream changelog still identify 50.0.2 as the current
+stable release. Do not substitute an unreleased or unreviewed build.
+
+The separate `Signing provider release gate` job now installs the locked
+wheels, verifies their installation report, and runs
+`tools/check_release_provider.py`. It intentionally rejects OpenSSL 4.0.x
+before 4.0.4 and denies every provider pair not explicitly reviewed and
+allowlisted. The allowlist is empty pending independent review. This is a
+visible CI policy check, not configured branch protection or independent
+approval; repository owners must make it required before permitting release.
+Functional CI remains separate and can succeed while the release gate fails.
+See https://pypi.org/project/cryptography/ for upstream release status.
 
 ## Supported security boundary and operational acceptance
 
@@ -80,7 +96,10 @@ Neither the hash nor signature establishes origin, completeness, freshness,
 chain of custody, or an atomic snapshot. A read-only mount alone does not
 necessarily prevent writes through other aliases. The owner and independent
 reviewer must explicitly accept this scope, or demand further implementation.
-Do not mark comprehensive TOCTOU protection achieved.
+Do not mark comprehensive TOCTOU protection achieved. Actual POSIX opened
+ancestor handles are now compared to current pathnames during leaf opening;
+this catches sampled descriptor/path divergence but does not prevent directory
+moves, mount substitution, or changes reverted between checks.
 
 ## Independent reviewer handoff
 
