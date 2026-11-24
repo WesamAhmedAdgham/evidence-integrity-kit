@@ -1,10 +1,10 @@
 # Evidence Integrity Kit
 
-A small, offline Python CLI for generating and verifying SHA-256 manifests for explicitly selected evidence files. Intended for reproducible security assessments, software test artifacts and research records. No third-party dependencies or network calls.
+A small, offline Python CLI for generating and verifying SHA-256 manifests for explicitly selected evidence files. Intended for reproducible security assessments, software test artifacts and research records. Unsigned operations use the Python standard library. Optional signed operations require PyCA cryptography and its dependencies. Runtime operations make no network calls.
 
 ## Requirements
 
-Python 3.11 or later.
+Python 3.11 or later. The signing dependency candidate has been tested in CI on Python 3.11 and 3.13; final hash-locked dependency review is pending.
 
 ## Example
 
@@ -41,9 +41,28 @@ On POSIX, evidence opening additionally walks the validated relative path using 
 
 After the per-file checks, create revalidates every processed pathname and verify revalidates every matching entry while the root guard remains active. Each check compares the original pathname `lstat()` identity, mode, link count, size, modification and ctime timestamps with a new validated pathname sample. A missing, invalid or observably changed earlier file prevents a successful create (exit 2) or changes that verify entry to an error (exit 1), preserving report order and existing mismatches/errors. Root-level failures can abort the operation (exit 2). The final pass stores one metadata sample per successful entry and does not reopen file contents or rehash files. This is sequential best-effort revalidation, not an atomic snapshot: previously checked files can still change after their last sample, changes can be reverted, and timestamp/identity semantics vary by filesystem. For a point-in-time integrity claim, obtain an independently trusted immutable filesystem snapshot or enforce write exclusion for the entire capture/verification operation. The tool does not create or certify such a snapshot.
 
+## Experimental signed manifests
+
+The development candidate includes detached Ed25519 signing and explicit signed verification. These commands are pending full regression, dependency hash locking and independent security review. Do not use this candidate for production evidence.
+
+Install optional signing dependencies in a trusted environment from the reviewed dependency set. The current candidate version pins are in requirements-signing.txt; final wheel hash locking is pending. See [design](docs/security-and-signature-design.md) and [dependency notes](docs/signing-dependency-candidate.md).
+
+Use an independently obtained Ed25519 SPKI public key and an encrypted PKCS#8 private key. Keep keys, manifest and signature outside the evidence root in trusted storage. Signing requires an interactive terminal for the non-echoing passphrase; passwords are not accepted as CLI arguments or environment variables.
+
+```sh
+python evidence_integrity.py sign --manifest manifest.json --private-key signer.pem > manifest.sig
+python evidence_integrity.py verify-signed --root ./evidence --manifest manifest.json --signature manifest.sig --public-key trusted.pem
+```
+
+The signature is 128 lowercase ASCII hex characters plus a newline. Use redirection that preserves ASCII/UTF-8 bytes (for example a POSIX shell or cmd.exe); legacy Windows PowerShell redirection can write UTF-16 and is not suitable. Never redirect output to an input file: the shell may truncate it before Python starts. The sign command attests to validated manifest bytes, not to the evidence contents at signing time. Verify the collection and trust its capture procedure before signing.
+
+Signed verification authenticates the exact retained manifest bytes before JSON parsing or evidence I/O. It rejects unknown manifest fields, missing/invalid signatures and wrong keys; no fallback to unsigned verification. Exit 0 means signature valid and all listed evidence matched; exit 1 means authenticated manifest but at least one evidence mismatch/error; exit 2 means invalid input, authentication failure or operation error. The authentication object reports the fixed protocol, verified=true and SHA-256 fingerprint of the raw public key. This fingerprint identifies the supplied key; trust must come from outside the tool. Unsigned verify remains available and never authenticates a manifest. Callers requiring authenticity must explicitly require verify-signed.
+
+The protocol does not certify authorship, freshness, chain of custody, completeness, or point-in-time snapshot consistency. A valid signature proves only that the supplied key verifies the supplied manifest bytes.
+
 ## Security model and limits
 
-This tool verifies content against a supplied manifest; it does not authenticate the manifest, prove authorship, establish chain of custody, or prove that the directory contains no additional files. It checks explicit relative paths and rejects traversal and symbolic links, junctions and other reparse points when exposed by `lstat()` on each listed path component below the resolved evidence root. Junction detection does not require `Path.is_junction()` (introduced in Python 3.12). Some Windows reparse types may be resolved by the operating system rather than exposed by `lstat()`; this is not a guarantee that all reparse points are detected. The explicitly supplied root is resolved before checking its descendants. It is not a sandbox and is not designed to withstand concurrent hostile filesystem changes. Use a trusted, stable local directory and keep manifests separate from untrusted evidence. Manifest paths may themselves be sensitive; inspect before sharing. Never publish actual client evidence or private manifests.
+Unsigned verification checks content against a supplied manifest without authenticating it. Signed verification authenticates manifest bytes relative to an explicitly trusted key. Neither mode proves authorship, establishes chain of custody, or proves that the directory contains no additional files. It checks explicit relative paths and rejects traversal and symbolic links, junctions and other reparse points when exposed by `lstat()` on each listed path component below the resolved evidence root. Junction detection does not require `Path.is_junction()` (introduced in Python 3.12). Some Windows reparse types may be resolved by the operating system rather than exposed by `lstat()`; this is not a guarantee that all reparse points are detected. The explicitly supplied root is resolved before checking its descendants. It is not a sandbox and is not designed to withstand concurrent hostile filesystem changes. Use a trusted, stable local directory and keep manifests separate from untrusted evidence. Manifest paths may themselves be sensitive; inspect before sharing. Never publish actual client evidence or private manifests.
 
 ## Tests
 
@@ -53,7 +72,7 @@ python -m unittest discover -s tests -v
 
 ## Status
 
-Initial experimental implementation (0.1.0), developed with AI assistance. Not extracted from a private codebase. Thirteen unit tests passed in a local Linux environment before publication. No adoption, Windows validation or independent security audit is claimed. Review before production use.
+Initial experimental implementation (0.1.0), developed with AI assistance. Not extracted from a private codebase. Thirteen unit tests passed in a local Linux environment before initial publication. Subsequent development candidates have cross-platform CI evidence in their pull requests; this signed CLI candidate is not yet release-approved. No adoption or independent security audit is claimed. Review before production use.
 
 ## Contributing
 

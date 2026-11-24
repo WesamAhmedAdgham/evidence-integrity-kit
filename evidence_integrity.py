@@ -310,6 +310,37 @@ def decode_manifest(raw):
 def load_manifest(path):
     return decode_manifest(read_manifest_bytes(path))
 
+def sign_manifest_file(manifest_path, private_key_path):
+    from manifest_signatures import sign_manifest_bytes
+    from signing_keys import read_private_key
+
+    raw = read_manifest_bytes(manifest_path)
+    validate_manifest(decode_manifest(raw), strict=True)
+    key = read_private_key(private_key_path)
+    return sign_manifest_bytes(raw, key)
+
+
+def verify_signed(root, manifest_path, signature_path, public_key_path):
+    from manifest_signatures import MAX_SIGNATURE_FILE_BYTES, verify_manifest_signature
+    from signing_keys import read_public_key, public_key_fingerprint
+
+    raw = read_manifest_bytes(manifest_path)
+    signature = read_control_bytes(signature_path, limit=MAX_SIGNATURE_FILE_BYTES,
+                                   label='Signature')
+    key = read_public_key(public_key_path)
+    verify_manifest_signature(raw, signature, key)
+    manifest = decode_manifest(raw)
+    validate_manifest(manifest, strict=True)
+    fingerprint = public_key_fingerprint(key)
+    result = verify(root, manifest)
+    result['authentication'] = {
+        'protocol': 'evidence-integrity-kit-ed25519-v1',
+        'verified': True,
+        'public_key_sha256': fingerprint,
+    }
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -319,11 +350,26 @@ def main(argv=None):
     check = commands.add_parser('verify', help='Compare evidence against a manifest')
     check.add_argument('--root', required=True, type=Path)
     check.add_argument('--manifest', required=True, type=Path)
+    sign = commands.add_parser('sign', help='Sign validated manifest bytes with an encrypted Ed25519 key')
+    sign.add_argument('--manifest', required=True, type=Path)
+    sign.add_argument('--private-key', required=True, type=Path)
+    signed = commands.add_parser('verify-signed', help='Authenticate a manifest before checking evidence')
+    signed.add_argument('--root', required=True, type=Path)
+    signed.add_argument('--manifest', required=True, type=Path)
+    signed.add_argument('--signature', required=True, type=Path)
+    signed.add_argument('--public-key', required=True, type=Path)
     args = parser.parse_args(argv)
     try:
         if args.command == 'create':
             result = generate(args.root, args.files)
             code = 0
+        elif args.command == 'sign':
+            signature = sign_manifest_file(args.manifest, args.private_key)
+            print(signature.decode('ascii'), end='')
+            return 0
+        elif args.command == 'verify-signed':
+            result = verify_signed(args.root, args.manifest, args.signature, args.public_key)
+            code = 0 if result['ok'] else 1
         else:
             result = verify(args.root, load_manifest(args.manifest))
             code = 0 if result['ok'] else 1
