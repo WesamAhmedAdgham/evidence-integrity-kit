@@ -7,6 +7,7 @@ import re
 import stat
 import sys
 import unicodedata
+from contextlib import contextmanager
 from pathlib import Path
 
 HEX = re.compile(r'[0-9a-f]{64}')
@@ -59,17 +60,46 @@ def evidence_path(root, name):
     return path, metadata
 
 
-def open_evidence(path, *, root=None, name=None):
+def check_root_identity(root, root_fd):
+    if root_fd is None:
+        return
+    expected = os.fstat(root_fd)
+    current = root.lstat()
+    if (not stat.S_ISDIR(current.st_mode) or not expected.st_ino or
+            not current.st_ino or not os.path.samestat(expected, current)):
+        raise ValueError('Evidence root identity changed or unavailable')
+
+
+@contextmanager
+def pinned_root(root):
+    if os.name != 'posix':
+        yield None
+        return
+    if (os.open not in os.supports_dir_fd or
+            not all(hasattr(os, flag) for flag in ('O_DIRECTORY', 'O_NOFOLLOW', 'O_NONBLOCK'))):
+        raise ValueError('Secure relative evidence opening unavailable on this POSIX platform')
+    expected = root.lstat()
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        opened = os.fstat(fd)
+        if not expected.st_ino or not opened.st_ino or not os.path.samestat(expected, opened):
+            raise ValueError('Evidence root identity changed or unavailable')
+        check_root_identity(root, fd)
+        yield fd
+        check_root_identity(root, fd)
+    finally:
+        os.close(fd)
+
+
+def open_evidence(path, *, root=None, name=None, root_fd=None):
     if os.name == 'posix':
         if root is not None:
-            # Walk validated components relative to directory descriptors, never
-            # following symlinks at the resolved root or below it.
-            if (os.open not in os.supports_dir_fd or
-                    not all(hasattr(os, flag) for flag in ('O_DIRECTORY', 'O_NOFOLLOW', 'O_NONBLOCK'))):
-                raise ValueError('Secure relative evidence opening unavailable on this POSIX platform')
+            if root_fd is None:
+                raise ValueError('Evidence root descriptor required')
+            check_root_identity(root, root_fd)
             parts = validate_relative_path(name)
             directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            fd = os.open(root, directory_flags)
+            fd = os.dup(root_fd)
             try:
                 for part in parts[:-1]:
                     next_fd = os.open(part, directory_flags, dir_fd=fd)
@@ -90,8 +120,8 @@ def content_metadata_changed(first, second):
     return (first.st_size, first.st_mtime_ns) != (second.st_size, second.st_mtime_ns)
 
 
-def digest(path, expected, *, root, name):
-    with open_evidence(path, root=root, name=name) as stream:
+def digest(path, expected, *, root, name, root_fd):
+    with open_evidence(path, root=root, name=name, root_fd=root_fd) as stream:
         before = os.fstat(stream.fileno())
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
             raise ValueError(f'Evidence identity changed or unavailable: {path.name!r}')
@@ -104,6 +134,7 @@ def digest(path, expected, *, root, name):
         fields = ('st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
         if any(getattr(before, field) != getattr(after, field) for field in fields):
             raise ValueError(f'Evidence changed during hashing: {path.name!r}')
+        check_root_identity(root, root_fd)
         _, current = evidence_path(root, name)
         if not current.st_ino or not os.path.samestat(after, current):
             raise ValueError(f'Evidence path changed during hashing: {name!r}')
@@ -121,9 +152,13 @@ def generate(root, names):
         check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
-    return {'version': 1, 'algorithm': 'sha256', 'files': [
-        {'path': name, 'sha256': digest(*evidence_path(root, name), root=root, name=name)}
-        for name in sorted(names)]}
+    files = []
+    with pinned_root(root) as root_fd:
+        for name in sorted(names):
+            check_root_identity(root, root_fd)
+            files.append({'path': name, 'sha256': digest(*evidence_path(root, name),
+                         root=root, name=name, root_fd=root_fd)})
+    return {'version': 1, 'algorithm': 'sha256', 'files': files}
 
 
 def verify(root, manifest):
@@ -149,13 +184,15 @@ def verify(root, manifest):
         seen.add(name)
         validated.append((name, item['sha256']))
     results = []
-    for name, expected_digest in validated:
-        try:
-            status = 'match' if digest(*evidence_path(root, name), root=root, name=name) == expected_digest else 'mismatch'
-        except (OSError, ValueError) as exc:
-            results.append({'path': name, 'status': 'error', 'detail': str(exc)})
-        else:
-            results.append({'path': name, 'status': status})
+    with pinned_root(root) as root_fd:
+        for name, expected_digest in validated:
+            check_root_identity(root, root_fd)
+            try:
+                status = 'match' if digest(*evidence_path(root, name), root=root, name=name, root_fd=root_fd) == expected_digest else 'mismatch'
+            except (OSError, ValueError) as exc:
+                results.append({'path': name, 'status': 'error', 'detail': str(exc)})
+            else:
+                results.append({'path': name, 'status': status})
     return {'ok': all(r['status'] == 'match' for r in results), 'files': results}
 
 
