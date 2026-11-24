@@ -83,8 +83,10 @@ def sample_directory_chain(root, name):
     for part in validate_relative_path(name)[:-1]:
         path = path / part
         metadata = path.lstat()
-        if (not stat.S_ISDIR(metadata.st_mode) or not metadata.st_ino or
+        if (stat.S_ISLNK(metadata.st_mode) or
                 getattr(metadata, 'st_file_attributes', 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError(f'Link not permitted: {name!r}')
+        if not stat.S_ISDIR(metadata.st_mode) or not metadata.st_ino:
             raise ValueError(f'Evidence directory identity unavailable or invalid: {name!r}')
         identities.append((metadata.st_dev, metadata.st_ino))
     return tuple(identities)
