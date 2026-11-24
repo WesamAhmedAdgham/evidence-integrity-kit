@@ -195,3 +195,31 @@ class SignedCLITests(unittest.TestCase):
         self.assertEqual((code, err), (0, ''))
         self.assertEqual(json.loads(out), {'ok': True,
                          'files': [{'path': self.name, 'status': 'match'}]})
+
+
+    def test_guarded_signed_cli_never_downgrades(self):
+        args = self.verify_args + ['--windows-deny-write']
+        code, out, err = self.run_main(args)
+        if os.name == 'nt':
+            self.assertEqual((code, err), (0, ''))
+            report = json.loads(out)
+            self.assertTrue(report['ok'])
+            self.assertTrue(report['authentication']['verified'])
+            self.assertEqual(report['protection']['mode'], 'windows-deny-write')
+            self.file.write_bytes(b'changed')
+            code, out, err = self.run_main(args)
+            self.assertEqual((code, err), (1, ''))
+            report = json.loads(out)
+            self.assertFalse(report['ok'])
+            self.assertTrue(report['authentication']['verified'])
+        else:
+            self.assert_failure((code, out, err), 'unavailable on this platform')
+
+    def test_guarded_signed_cli_authenticates_before_guard(self):
+        self.manifest.write_bytes(self.raw + b' ')
+        with patch.object(kit, 'windows_guarded_digests') as acquire, \
+                patch.object(kit, 'verify') as verify:
+            self.assert_failure(self.run_main(self.verify_args + ['--windows-deny-write']),
+                                'signature invalid')
+            verify.assert_not_called()
+            acquire.assert_not_called()

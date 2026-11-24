@@ -45,16 +45,41 @@ class WindowsDenyWriteTests(unittest.TestCase):
         self.manifest = kit.generate(self.root, self.names)
 
     def attempt(self, path, action):
-        code = (
-            "import sys; from pathlib import Path; p=Path(sys.argv[1]); "
-            "action=sys.argv[2]\n"
-            "try:\n"
-            " if action=='write':\n"
-            "  with p.open('r+b') as f: f.write(b'ZZZZ')\n"
-            " else: p.rename(p.with_name(p.name+'.moved'))\n"
-            "except OSError as e:\n"
-            " print(e.winerror); sys.exit(1)\n"
-        )
+        # Use native CreateFileW so sharing violations retain the exact
+        # Win32 error rather than a CRT errno-only PermissionError.
+        code = """import ctypes as c
+from ctypes import wintypes as w
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+if sys.argv[2] == 'write':
+    k = c.WinDLL('kernel32', use_last_error=True)
+    create = k.CreateFileW
+    create.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
+    create.restype = w.HANDLE
+    close = k.CloseHandle
+    close.argtypes, close.restype = [w.HANDLE], w.BOOL
+    write = k.WriteFile
+    write.argtypes = [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
+    write.restype = w.BOOL
+    h = create(str(p), 0x40000000, 7, None, 3, 0, None)
+    if h is None or h == c.c_void_p(-1).value:
+        print(c.get_last_error())
+        sys.exit(1)
+    try:
+        count = w.DWORD()
+        if not write(h, c.create_string_buffer(b'ZZZZ'), 4, c.byref(count), None) or count.value != 4:
+            sys.exit(3)
+    finally:
+        if not close(h):
+            sys.exit(4)
+else:
+    try:
+        p.rename(p.with_name(p.name + '.moved'))
+    except OSError as e:
+        print(e.winerror)
+        sys.exit(1)
+"""
         return subprocess.run([sys.executable, '-c', code, str(path), action],
                               capture_output=True, text=True, timeout=15)
 
@@ -128,3 +153,20 @@ class WindowsDenyWriteTests(unittest.TestCase):
                 kit.verify(self.root, self.manifest, deny_write=True)
         self.assertEqual(self.attempt(self.a, 'write').returncode, 0)
         self.assertEqual(self.attempt(self.b, 'write').returncode, 0)
+
+
+    def test_cli_guarded_acquisition_failure_has_no_success_output(self):
+        manifest = self.root.parent / ('unused-' + self.root.name + '.json')
+        self.addCleanup(manifest.unlink, missing_ok=True)
+        import json
+        manifest.write_text(json.dumps(self.manifest), encoding='ascii')
+        cli = Path(kit.__file__).resolve()
+        with self.a.open('r+b'):
+            result = subprocess.run(
+                [sys.executable, str(cli), 'verify', '--windows-deny-write',
+                 '--root', str(self.root), '--manifest', str(manifest)],
+                capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, '')
+        self.assertIn('Error:', result.stderr)
+        self.assertNotIn('Traceback', result.stderr)
