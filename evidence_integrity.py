@@ -4,20 +4,35 @@ import hashlib
 import json
 import re
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 HEX = re.compile(r'[0-9a-f]{64}')
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 
-def evidence_path(root, name):
-    if not isinstance(name, str) or not name or '\\' in name or ':' in name or '\x00' in name:
+# Use a conservative portable subset of Windows and POSIX filenames.
+WINDOWS_DEVICES = frozenset({'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} |
+                            {prefix + digit for prefix in ('COM', 'LPT')
+                             for digit in '123456789¹²³'})
+
+
+def validate_relative_path(name):
+    if not isinstance(name, str) or not name:
         raise ValueError('Invalid relative path')
     parts = name.split('/')
-    if any(p in ('', '.', '..') for p in parts):
-        raise ValueError(f'Invalid relative path: {name!r}')
+    for part in parts:
+        if (part in ('', '.', '..') or part.endswith(('.', ' ')) or
+                any(c in '<>:"\\|?*' or ord(c) < 32 or 0xD800 <= ord(c) <= 0xDFFF
+                    for c in part) or
+                part.split('.', 1)[0].rstrip(' ').upper() in WINDOWS_DEVICES):
+            raise ValueError(f'Invalid portable relative path: {name!r}')
+    return parts
+
+
+def evidence_path(root, name):
+    parts = validate_relative_path(name)
     path = root
-    for part in PurePosixPath(name).parts:
+    for part in parts:
         path = path / part
         if path.is_symlink() or (hasattr(path, 'is_junction') and path.is_junction()):
             raise ValueError(f'Link not permitted: {name!r}')
@@ -33,7 +48,11 @@ def digest(path):
 
 def generate(root, names):
     root = Path(root).resolve(strict=True)
-    if not root.is_dir() or not names or len(set(names)) != len(names):
+    if not root.is_dir() or not names:
+        raise ValueError('A directory and unique file paths are required')
+    for name in names:
+        validate_relative_path(name)
+    if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
     return {'version': 1, 'algorithm': 'sha256', 'files': [
         {'path': name, 'sha256': digest(evidence_path(root, name))}
@@ -56,6 +75,7 @@ def verify(root, manifest):
         if not isinstance(item, dict) or not isinstance(item.get('path'), str) or not isinstance(item.get('sha256'), str) or not HEX.fullmatch(item['sha256']):
             raise ValueError('Invalid manifest entry')
         name = item['path']
+        validate_relative_path(name)
         if name in seen:
             raise ValueError(f'Duplicate path: {name!r}')
         seen.add(name)
