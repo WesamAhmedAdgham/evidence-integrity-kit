@@ -6,8 +6,8 @@ For the CPython 3.11/3.13 matrix, select cryptography 50.0.2 (2026-09-30),
 cffi 2.1.1 (2026-08-03), and pycparser 3.0 (2026-01-21). Use exact
 version pins and wheel-only installation in CI; run the unsigned tests first
 and crypto tests separately without optional-provider skips. The allowlist now pins SHA-256 hashes for the ten exact wheels observed
-in successful signed CLI CI at 41b174c. Actual hash-enforced installation
-on the new candidate remains pending; final acceptance still requires
+in successful signed CLI CI at 41b174c. Hash-enforced installation and pip check passed in all twelve native jobs
+at 2cd3fb3; final acceptance still requires
 independent review and current advisories, including bundled OpenSSL.
 Do not interpret this limited review as proof of absence of vulnerabilities.
 
@@ -47,11 +47,10 @@ recorded in the test. This is an independent tool path, not an independent
 security audit, and OpenSSL may share implementation ancestry with PyCA.
 The seed is public test data, not a real private key.
 
-The new primitive module accepts an already loaded Ed25519 key and exact
-manifest bytes. It has no CLI, PEM loading, passphrase handling, evidence
-verification integration or schema validation. Its caller must enforce
-the signed-manifest design and must not treat primitive verification as
-proof of evidence consistency. No production signing feature is claimed.
+The primitive module accepts an already loaded Ed25519 key and exact
+manifest bytes. It is integrated by the experimental signed CLI, which handles PEM loading,
+passphrase input and manifest validation separately. Primitive verification
+is not proof of evidence consistency. No production release is claimed.
 
 ## Exact wheel allowlist (2026-11-24)
 
