@@ -82,3 +82,26 @@ class WindowsRootLifetimeTests(unittest.TestCase):
     def test_stable_windows_root(self):
         manifest = kit.generate(self.root, ['a.txt', 'b.txt'])
         self.assertTrue(kit.verify(self.root, manifest)['ok'])
+
+    def test_root_rename_denied_while_guard_active_and_allowed_after(self):
+        with kit.pinned_root(self.root) as guard:
+            self.assertIsNotNone(guard)
+            with self.assertRaises(OSError) as raised:
+                self.root.rename(self.old)
+            self.assertIn(raised.exception.winerror, (5, 32))
+            self.assertTrue(os.path.samestat(self.original_identity, self.root.stat()))
+        self.root.rename(self.old)
+        self.assertTrue(self.old.is_dir())
+
+    def test_root_guard_released_after_exception(self):
+        with self.assertRaisesRegex(ValueError, 'synthetic failure'):
+            with kit.pinned_root(self.root) as guard:
+                self.assertIsNotNone(guard)
+                raise ValueError('synthetic failure')
+        self.root.rename(self.old)
+        self.assertTrue(self.old.is_dir())
+
+    def test_missing_root_guard_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, 'root handle required'):
+            kit.open_evidence(self.root / 'a.txt', root=self.root,
+                              name='a.txt', root_fd=None)

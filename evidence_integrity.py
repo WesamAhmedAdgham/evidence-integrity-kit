@@ -61,6 +61,10 @@ def evidence_path(root, name):
 
 
 def check_root_identity(root, root_fd):
+    if os.name == 'nt':
+        from windows_root import check_windows_root
+        check_windows_root(root, root_fd)
+        return
     if root_fd is None:
         return
     expected = os.fstat(root_fd)
@@ -72,6 +76,11 @@ def check_root_identity(root, root_fd):
 
 @contextmanager
 def pinned_root(root):
+    if os.name == 'nt':
+        from windows_root import pinned_windows_root
+        with pinned_windows_root(root) as guard:
+            yield guard
+        return
     if os.name != 'posix':
         yield None
         return
@@ -111,6 +120,8 @@ def open_evidence(path, *, root=None, name=None, root_fd=None):
                 os.close(fd)
         # A substituted manifest FIFO must not block before descriptor validation.
         return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
+    if os.name == 'nt' and root is not None:
+        check_root_identity(root, root_fd)
     return path.open('rb')
 
 

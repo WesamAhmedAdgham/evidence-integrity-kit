@@ -1,0 +1,98 @@
+"""Native Windows root guard; this module is imported only on Windows."""
+import ctypes
+import os
+from contextlib import contextmanager
+from ctypes import wintypes
+
+
+# Win32 fileapi.h, minwinbase.h, winnt.h.
+FILE_LIST_DIRECTORY = 0x0001
+FILE_READ_ATTRIBUTES = 0x0080
+FILE_SHARE_READ = 0x0001
+FILE_SHARE_WRITE = 0x0002
+OPEN_EXISTING = 3
+FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+FILE_ATTRIBUTE_DIRECTORY = 0x0010
+FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
+FILE_ID_INFO_CLASS = 18
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+class FileAttributeTagInfo(ctypes.Structure):
+    _fields_ = [('attributes', wintypes.DWORD), ('tag', wintypes.DWORD)]
+
+
+class FileIdInfo(ctypes.Structure):
+    _fields_ = [('volume', ctypes.c_uint64), ('identifier', ctypes.c_ubyte * 16)]
+
+
+_kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+_create = _kernel.CreateFileW
+_create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                    ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+_create.restype = wintypes.HANDLE
+_info = _kernel.GetFileInformationByHandleEx
+_info.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+_info.restype = wintypes.BOOL
+_close = _kernel.CloseHandle
+_close.argtypes = [wintypes.HANDLE]
+_close.restype = wintypes.BOOL
+
+
+@contextmanager
+def directory_handle(path):
+    # Request directory listing access, not just attributes, so the handle
+    # participates in sharing checks. Deliberately omit FILE_SHARE_DELETE.
+    handle = _create(os.fspath(path), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+                     FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
+                     FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
+    if handle == INVALID_HANDLE_VALUE or handle is None:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        yield handle
+    finally:
+        if not _close(handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+
+def directory_identity(handle):
+    attributes = FileAttributeTagInfo()
+    if not _info(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS,
+                 ctypes.byref(attributes), ctypes.sizeof(attributes)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if (not attributes.attributes & FILE_ATTRIBUTE_DIRECTORY or
+            attributes.attributes & FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError('Evidence root must be a directory without reparse points')
+    identity = FileIdInfo()
+    if not _info(handle, FILE_ID_INFO_CLASS, ctypes.byref(identity), ctypes.sizeof(identity)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    identifier = bytes(identity.identifier)
+    if not any(identifier):
+        raise ValueError('Evidence root identity unavailable')
+    return identity.volume, identifier
+
+
+def check_windows_root(root, guard):
+    if guard is None:
+        raise ValueError('Windows evidence root handle required')
+    handle, expected = guard
+    if directory_identity(handle) != expected:
+        raise ValueError('Evidence root identity changed or unavailable')
+    with directory_handle(root) as current:
+        if directory_identity(current) != expected:
+            raise ValueError('Evidence root identity changed or unavailable')
+
+
+@contextmanager
+def pinned_windows_root(root):
+    expected = root.lstat()
+    with directory_handle(root) as handle:
+        guard = handle, directory_identity(handle)
+        current = root.lstat()
+        if not expected.st_ino or not current.st_ino or not os.path.samestat(expected, current):
+            raise ValueError('Evidence root identity changed or unavailable')
+        check_windows_root(root, guard)
+        yield guard
+        check_windows_root(root, guard)
