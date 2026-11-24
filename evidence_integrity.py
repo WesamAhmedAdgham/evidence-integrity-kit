@@ -8,7 +8,7 @@ import re
 import stat
 import sys
 import unicodedata
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 HEX = re.compile(r'[0-9a-f]{64}')
@@ -136,6 +136,16 @@ def pinned_root(root):
         os.close(fd)
 
 
+def check_posix_directory_handles(directories):
+    for path, fd in directories:
+        opened = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(current.st_mode) or
+                not opened.st_ino or not current.st_ino or
+                not os.path.samestat(opened, current)):
+            raise ValueError('Evidence path changed: opened directory identity changed')
+
+
 def open_evidence(path, *, root=None, name=None, root_fd=None):
     if os.name == 'posix':
         if root is not None:
@@ -144,16 +154,28 @@ def open_evidence(path, *, root=None, name=None, root_fd=None):
             check_root_identity(root, root_fd)
             parts = validate_relative_path(name)
             directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-            fd = os.dup(root_fd)
-            try:
+            # Retain all directory descriptors until the leaf is open. Compare
+            # the actual opened objects, not just two pathname samples.
+            with ExitStack() as stack:
+                fd = os.dup(root_fd)
+                stack.callback(os.close, fd)
+                opened_directories = []
+                prefix = root
                 for part in parts[:-1]:
-                    next_fd = os.open(part, directory_flags, dir_fd=fd)
-                    os.close(fd)
-                    fd = next_fd
-                return open(parts[-1], 'rb', opener=lambda leaf, flags: os.open(
+                    prefix = prefix / part
+                    fd = os.open(part, directory_flags, dir_fd=fd)
+                    stack.callback(os.close, fd)
+                    opened_directories.append((prefix, fd))
+                    check_posix_directory_handles(opened_directories)
+                stream = open(parts[-1], 'rb', opener=lambda leaf, flags: os.open(
                     leaf, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd))
-            finally:
-                os.close(fd)
+                try:
+                    check_root_identity(root, root_fd)
+                    check_posix_directory_handles(opened_directories)
+                except BaseException:
+                    stream.close()
+                    raise
+                return stream
         # A substituted manifest FIFO must not block before descriptor validation.
         return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
     if os.name == 'nt' and root is not None:
