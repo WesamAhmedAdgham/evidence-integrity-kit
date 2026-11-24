@@ -108,4 +108,4 @@ jobs:
       - name: Verify dependency consistency
         run: python -m pip check
       - name: Exercise synthetic point validation
-        run: python -m unittest discover -s evaluation -p test_validator.py -v
+        run: python -m unittest discover -s evaluation -v
