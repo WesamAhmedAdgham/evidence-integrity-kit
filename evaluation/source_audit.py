@@ -22,6 +22,7 @@ SOURCE = {
     'pycparser': ('3.0', '600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29', 'pycparser/'),
 }
 CFFI_COMMIT = 'fd33e7700f0ebafe6f30bd5053f13327221b77a2'
+PYCPARSER_COMMIT = '77de509f0268f44ee587b5a4d9f0d680e269fcae'
 MAX_UNPACKED = 32 * 1024 * 1024
 MAX_MEMBERS = 10000
 
@@ -122,12 +123,12 @@ def wheel_files(data):
     return {name: hashlib.sha256(raw).hexdigest() for name, raw in result.items()}
 
 
-def compare_package(files, source, package, source_prefix):
+def compare_package(files, source, package, source_prefix, *, all_files=False):
     prefix = package + '/'
     wheel = {name[len(prefix):]: digest for name, digest in files.items()
-             if name.startswith(prefix) and name.endswith(('.py', '.h', '.c'))}
+             if name.startswith(prefix) and (all_files or name.endswith(('.py', '.h', '.c')))}
     reference = {name[len(source_prefix):]: digest for name, digest in source.items()
-                 if name.startswith(source_prefix) and name.endswith(('.py', '.h', '.c'))}
+                 if name.startswith(source_prefix) and (all_files or name.endswith(('.py', '.h', '.c')))}
     if not wheel or not reference:
         raise ValueError('Empty package source comparison')
     return {
@@ -182,12 +183,29 @@ def main():
             relevant_links = [name for name in upstream_links
                               if name.startswith(('src/cffi/', 'src/c/'))]
             mismatch |= bool(changed or only_source or only_git or relevant_links)
+        if name == 'pycparser':
+            # release_v3.00 is a lightweight tag to an unsigned commit.
+            # Compare all package files, including non-Python package data.
+            # GitHub transport/source agreement is not publisher authentication.
+            upstream = fetch('https://codeload.github.com/eliben/pycparser/tar.gz/' + PYCPARSER_COMMIT,
+                             'codeload.github.com', MAX_WHEEL)
+            upstream_links = {}
+            git = source_files(upstream, links=upstream_links)
+            comparison = compare_package(source, git, name, prefix, all_files=True)
+            relevant_links = sorted(k for k in upstream_links if k.startswith(prefix))
+            mismatch |= bool(comparison['different'] or comparison['wheel_only'] or
+                             comparison['source_only'] or relevant_links)
+            print(json.dumps({'package': name, 'upstream_commit': PYCPARSER_COMMIT,
+                              'archive_sha256': hashlib.sha256(upstream).hexdigest(),
+                              'sdist_vs_git_package': comparison,
+                              'upstream_package_symlinks_not_followed': relevant_links,
+                              'independently_authenticated': False}, sort_keys=True), flush=True)
         for row in select_wheels(meta, pins[name][1]):
             data = fetch(row['url'], 'files.pythonhosted.org', MAX_WHEEL)
             if hashlib.sha256(data).hexdigest() != row['digests']['sha256']:
                 raise ValueError('Wheel digest mismatch')
             files = wheel_files(data)
-            comparison = compare_package(files, source, name, prefix)
+            comparison = compare_package(files, source, name, prefix, all_files=(name == 'pycparser'))
             native = native_inventory(files)
             mismatch |= bool(comparison['different'] or comparison['wheel_only'] or comparison['source_only'])
             print(json.dumps({'package': name, 'filename': row['filename'], 'sha256': row['digests']['sha256'],

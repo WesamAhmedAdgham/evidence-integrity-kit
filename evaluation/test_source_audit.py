@@ -82,3 +82,13 @@ class SourceAuditTests(unittest.TestCase):
             t.addfile(link)
         with self.assertRaises(ValueError):
             source_files(out.getvalue(), links={})
+
+    def test_complete_package_comparison_includes_noncode_data(self):
+        files = {'pkg/a.py': 'same', 'pkg/_ast.cfg': 'wheel', 'pkg/extra.dat': 'extra'}
+        source = {'pkg/a.py': 'same', 'pkg/_ast.cfg': 'source', 'pkg/missing.txt': 'missing'}
+        self.assertEqual(compare_package(files, source, 'pkg', 'pkg/'),
+                         {'matched': ['a.py'], 'different': [], 'wheel_only': [], 'source_only': []})
+        self.assertEqual(compare_package(files, source, 'pkg', 'pkg/', all_files=True),
+                         {'matched': ['a.py'], 'different': ['_ast.cfg'],
+                          'wheel_only': ['extra.dat'], 'source_only': ['missing.txt']})
+
