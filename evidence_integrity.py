@@ -59,9 +59,27 @@ def evidence_path(root, name):
     return path, metadata
 
 
-def open_evidence(path):
+def open_evidence(path, *, root=None, name=None):
     if os.name == 'posix':
-        # A substituted FIFO must not block before descriptor validation.
+        if root is not None:
+            # Walk validated components relative to directory descriptors, never
+            # following symlinks at the resolved root or below it.
+            if (os.open not in os.supports_dir_fd or
+                    not all(hasattr(os, flag) for flag in ('O_DIRECTORY', 'O_NOFOLLOW', 'O_NONBLOCK'))):
+                raise ValueError('Secure relative evidence opening unavailable on this POSIX platform')
+            parts = validate_relative_path(name)
+            directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            fd = os.open(root, directory_flags)
+            try:
+                for part in parts[:-1]:
+                    next_fd = os.open(part, directory_flags, dir_fd=fd)
+                    os.close(fd)
+                    fd = next_fd
+                return open(parts[-1], 'rb', opener=lambda leaf, flags: os.open(
+                    leaf, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd))
+            finally:
+                os.close(fd)
+        # A substituted manifest FIFO must not block before descriptor validation.
         return open(path, 'rb', opener=lambda name, flags: os.open(name, flags | os.O_NONBLOCK))
     return path.open('rb')
 
@@ -73,7 +91,7 @@ def content_metadata_changed(first, second):
 
 
 def digest(path, expected, *, root, name):
-    with open_evidence(path) as stream:
+    with open_evidence(path, root=root, name=name) as stream:
         before = os.fstat(stream.fileno())
         if not expected.st_ino or not before.st_ino or not os.path.samestat(expected, before):
             raise ValueError(f'Evidence identity changed or unavailable: {path.name!r}')

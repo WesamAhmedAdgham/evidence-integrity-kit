@@ -16,10 +16,10 @@ class MetadataGapTests(unittest.TestCase):
         self.path.write_bytes(b'{}')
         self.real_open = kit.open_evidence
 
-    def append_at_open(self, path):
+    def append_at_open(self, path, *args, **kwargs):
         with path.open('ab') as stream:
             stream.write(b' ')
-        return self.real_open(path)
+        return self.real_open(path, *args, **kwargs)
 
     def test_evidence_change_before_open(self):
         with patch('evidence_integrity.open_evidence', side_effect=self.append_at_open):
