@@ -2,11 +2,12 @@
 import hashlib
 import os
 import stat
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from native_fixture_support import junction_fixture, link_fixture
 
 from evidence_integrity import generate, verify
 
@@ -23,10 +24,7 @@ class JunctionTests(unittest.TestCase):
         self.target.mkdir()
         (self.target / 'a.txt').write_bytes(b'synthetic')
         self.alias = self.root / 'alias'
-        result = subprocess.run(
-            ['cmd.exe', '/d', '/c', 'mklink', '/J', str(self.alias), str(self.target)],
-            capture_output=True, timeout=15)
-        self.assertEqual(result.returncode, 0, repr(result.stdout + result.stderr))
+        junction_fixture(self, self.alias, self.target)
         self.addCleanup(os.rmdir, self.alias)
         self.assertTrue(self.alias.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
         self.assertTrue((self.alias / 'a.txt').samefile(self.target / 'a.txt'))
