@@ -52,3 +52,33 @@ class SourceAuditTests(unittest.TestCase):
         src = source_files(make_source(content=b'y'))
         self.assertEqual(compare_package(wheel, src, 'pkg', 'pkg/')['different'], ['a.py'])
         self.assertEqual(native_inventory({'pkg/a.so.1': 'hash', 'pkg/a.py': 'hash'}), {'pkg/a.so.1': 'hash'})
+
+    def test_upstream_symlink_inventory_does_not_follow(self):
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode='w:gz') as t:
+            m = tarfile.TarInfo('pkg-1/pkg/a.py')
+            m.size = 1
+            t.addfile(m, io.BytesIO(b'x'))
+            link = tarfile.TarInfo('pkg-1/pkg/link.py')
+            link.type = tarfile.SYMTYPE
+            link.linkname = '../../outside.py'
+            t.addfile(link)
+        with self.assertRaises(ValueError):
+            source_files(out.getvalue())
+        links = {}
+        files = source_files(out.getvalue(), links=links)
+        self.assertEqual(set(files), {'pkg/a.py'})
+        self.assertEqual(links, {'pkg/link.py': '../../outside.py'})
+
+    def test_hardlink_remains_rejected(self):
+        out = io.BytesIO()
+        with tarfile.open(fileobj=out, mode='w:gz') as t:
+            m = tarfile.TarInfo('pkg-1/pkg/a.py')
+            m.size = 1
+            t.addfile(m, io.BytesIO(b'x'))
+            link = tarfile.TarInfo('pkg-1/pkg/link.py')
+            link.type = tarfile.LNKTYPE
+            link.linkname = 'pkg-1/pkg/a.py'
+            t.addfile(link)
+        with self.assertRaises(ValueError):
+            source_files(out.getvalue(), links={})

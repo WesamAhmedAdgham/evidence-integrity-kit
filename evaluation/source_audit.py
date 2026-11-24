@@ -38,7 +38,7 @@ def checked_size(count, total):
         raise ValueError('Archive inspection budget exceeded')
 
 
-def source_files(data):
+def source_files(data, *, links=None):
     result, seen = {}, set()
     root, total, count = None, 0, 0
     with tarfile.open(fileobj=io.BytesIO(data), mode='r|gz') as archive:
@@ -57,8 +57,13 @@ def source_files(data):
             checked_size(count, total)
             if member.isdir():
                 continue
+            if member.issym() and links is not None and len(parts) >= 2:
+                # Inventory a Git source symlink as metadata only. Never resolve,
+                # extract, follow, or compare it as regular file content.
+                links['/'.join(parts[1:])] = member.linkname
+                continue
             if not member.isfile() or len(parts) < 2:
-                raise ValueError('Unsupported source archive member')
+                raise ValueError(f'Unsupported source archive member: {name!r}, type={member.type!r}')
             stream = archive.extractfile(member)
             raw = stream.read(member.size + 1)
             if len(raw) != member.size:
@@ -159,7 +164,8 @@ def main():
             # maintainer key and source archive identity still need review.
             upstream = fetch('https://codeload.github.com/python-cffi/cffi/tar.gz/' + CFFI_COMMIT,
                              'codeload.github.com', MAX_WHEEL)
-            git = source_files(upstream)
+            upstream_links = {}
+            git = source_files(upstream, links=upstream_links)
             keys = {k for k in set(source) | set(git)
                     if k.startswith(('src/cffi/', 'src/c/')) and k.endswith(('.py', '.h', '.c'))}
             changed = sorted(k for k in keys if k in source and k in git and source[k] != git[k])
@@ -171,8 +177,11 @@ def main():
             print(json.dumps({'upstream_commit': CFFI_COMMIT, 'archive_sha256': hashlib.sha256(upstream).hexdigest(),
                               'matched_source_files': matched, 'different': changed,
                               'sdist_only': only_source, 'git_only': only_git,
+                              'upstream_symlinks_not_followed': upstream_links,
                               'independently_authenticated': False}, sort_keys=True), flush=True)
-            mismatch |= bool(changed or only_source or only_git)
+            relevant_links = [name for name in upstream_links
+                              if name.startswith(('src/cffi/', 'src/c/'))]
+            mismatch |= bool(changed or only_source or only_git or relevant_links)
         for row in select_wheels(meta, pins[name][1]):
             data = fetch(row['url'], 'files.pythonhosted.org', MAX_WHEEL)
             if hashlib.sha256(data).hexdigest() != row['digests']['sha256']:
