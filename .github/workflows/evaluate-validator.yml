@@ -1,15 +1,15 @@
 name: Isolated Ed25519 validator evaluation
 
 on:
-  pull_request:
-    branches: ['fix/key-policy-review-packet']
+  push:
+    branches: ['fix/ed25519-validator-evaluation']
 
 permissions:
   contents: read
 
 jobs:
   evaluate:
-    if: github.head_ref == 'fix/ed25519-validator-evaluation'
+    if: github.ref == 'refs/heads/fix/ed25519-validator-evaluation'
     name: Validator evaluation / ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
