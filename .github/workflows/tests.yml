@@ -78,4 +78,4 @@ jobs:
       - name: Verify installed wheel evidence
         run: python tools/verify_signing_environment.py --report signing-install-report.json --lock requirements-signing.txt
       - name: Require reviewed signing provider
-        run: python tools/check_release_provider.py
+        run: python -m tools.check_release_provider --report signing-install-report.json --lock requirements-signing.txt
