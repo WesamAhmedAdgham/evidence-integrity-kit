@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import evidence_integrity as kit
+from native_fixture_support import link_fixture
 
 
 class ManifestStabilityTests(unittest.TestCase):
@@ -83,5 +84,5 @@ class ManifestStabilityTests(unittest.TestCase):
 
     def test_regular_hard_link_remains_supported(self):
         alias = self.root / 'alias.json'
-        os.link(self.path, alias)
+        link_fixture(self, 'hard link', lambda: os.link(self.path, alias))
         self.assertEqual(kit.load_manifest(alias), {})
