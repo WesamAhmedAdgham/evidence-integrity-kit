@@ -13,6 +13,7 @@ from pathlib import Path
 
 HEX = re.compile(r'[0-9a-f]{64}')
 MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+MAX_PATH_COMPONENTS = 128
 
 
 # Use a conservative portable subset of Windows and POSIX filenames.
@@ -24,6 +25,9 @@ WINDOWS_DEVICES = frozenset({'CON', 'PRN', 'AUX', 'NUL', 'CONIN$', 'CONOUT$'} |
 def validate_relative_path(name):
     if not isinstance(name, str) or not name:
         raise ValueError('Invalid relative path')
+    # Bound traversal descriptors and trie depth before opening evidence.
+    if name.count('/') >= MAX_PATH_COMPONENTS:
+        raise ValueError('Evidence path exceeds component limit')
     parts = name.split('/')
     for part in parts:
         if (part in ('', '.', '..') or part.endswith(('.', ' ')) or
