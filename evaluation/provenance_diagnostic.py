@@ -51,6 +51,7 @@ def main():
     pins = load_lock(Path('evaluation/requirements-validator.txt'))
     records = []
     failed = False
+    negative_control_executed = False
     with tempfile.TemporaryDirectory(prefix='eik-provenance-') as temp:
         for name, (version, hashes) in sorted(pins.items()):
             metadata = json.loads(fetch(
@@ -92,8 +93,37 @@ def main():
                         rec['status'] = 'diagnostic_verified' if result.returncode == 0 else 'verification_failed'
                         failed |= result.returncode != 0
                         print(result.stdout, result.stderr, flush=True)
+                        if result.returncode == 0 and not negative_control_executed:
+                            provenance_path = Path(temp) / (filename + '.provenance')
+                            provenance_path.write_text(json.dumps(provenance), encoding='utf-8')
+                            command = [sys.executable, '-m', 'pypi_attestations', 'verify', 'pypi',
+                                       '--repository', REPOSITORIES[name], '--provenance-file',
+                                       str(provenance_path), str(path)]
+                            baseline = subprocess.run(command, capture_output=True, text=True,
+                                                      timeout=120, check=False)
+                            if baseline.returncode != 0:
+                                raise ValueError('Local provenance positive control failed')
+                            wrong_repository = list(command)
+                            wrong_repository[wrong_repository.index('--repository') + 1] = 'https://github.com/pypi/pypi-attestations'
+                            wrong = subprocess.run(wrong_repository, capture_output=True, text=True,
+                                                   timeout=120, check=False)
+                            # Change one byte of a disposable local artifact; never install it.
+                            try:
+                                path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+                                altered = subprocess.run(command, capture_output=True, text=True,
+                                                         timeout=120, check=False)
+                            finally:
+                                path.write_bytes(data)
+                            if wrong.returncode == 0 or altered.returncode == 0:
+                                raise ValueError('Diagnostic verifier accepted a negative control')
+                            print(json.dumps({'negative_controls': {'wrong_repository_exit': wrong.returncode,
+                                                                    'altered_artifact_exit': altered.returncode},
+                                              'local_positive_control_exit': baseline.returncode}), flush=True)
+                            negative_control_executed = True
                 print(json.dumps(rec, sort_keys=True), flush=True)
                 records.append(rec)
+    if not negative_control_executed:
+        raise ValueError('No diagnostic negative controls executed')
     if len(records) != sum(len(hashes) for _, hashes in pins.values()):
         raise ValueError('Incomplete artifact inventory')
     print(json.dumps({'artifacts': len(records),

@@ -126,9 +126,9 @@ jobs:
       - name: Install diagnostic verifier in separate virtual environment
         run: |
           python -m venv .provenance-venv
-          .provenance-venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: --report verifier-install-report.json pypi-attestations==0.0.32
+          .provenance-venv/bin/python -m pip --isolated install --index-url https://pypi.org/simple --only-binary=:all: --require-hashes --force-reinstall --no-cache-dir --report verifier-install-report.json -r evaluation/requirements-provenance.txt
           .provenance-venv/bin/python -m pip check
           .provenance-venv/bin/python -m pip freeze
-          cat verifier-install-report.json
+          .provenance-venv/bin/python -m evaluation.verify_verifier_report
       - name: Check locked wheel bytes and available publisher attestations
         run: .provenance-venv/bin/python -m evaluation.provenance_diagnostic
