@@ -40,14 +40,36 @@ printf AAAA | sudo tee "$live/nested/a" >/dev/null
 printf BBBB | sudo tee "$live/b" >/dev/null
 sudo chmod 666 "$live/nested/a" "$live/b"
 sudo ln -s nested/a "$live/alias"
+# Verify actual ordinary-volume rejection before the entitlement-dependent
+# positive fixture. These negative checks never satisfy the positive gate.
+python tools/check_apfs_fixture.py "$live" "$live" "eik-fixture@$device" --ordinary-live
+hdiutil detach "$live"
+attached=0
+mkdir -p "$live"
+hdiutil attach -readonly -nobrowse -owners on -mountpoint "$live" "$image" >/dev/null
+attached=1
+python tools/check_apfs_fixture.py "$live" "$live" "eik-fixture@$device" --ordinary-readonly
+hdiutil detach "$live"
+attached=0
+mkdir -p "$live"
+hdiutil attach -plist -nobrowse -owners on -mountpoint "$live" "$image" > "$base/attach.plist"
+attached=1
+device="$(python -c 'import plistlib,sys; data=plistlib.load(open(sys.argv[1],"rb")); print(next(e["dev-entry"] for e in data["system-entities"] if e.get("mount-point")==sys.argv[2]))' "$base/attach.plist" "$live")"
+case "$device" in /dev/disk[0-9]*s[0-9]*) ;; *) echo "Unexpected fixture device"; exit 1;; esac
 python_bin="$(command -v python)"
 sudo "$python_bin" -c '
-import ctypes as c, os, sys
+import ctypes as c, errno, os, sys
 fd=os.open(sys.argv[1],os.O_RDONLY|os.O_DIRECTORY)
 try:
     f=c.CDLL(None,use_errno=True).fs_snapshot_create
     f.argtypes=[c.c_int,c.c_char_p,c.c_uint32]; f.restype=c.c_int
-    if f(fd,b"eik-fixture",0): raise OSError(c.get_errno(),os.strerror(c.get_errno()))
+    if f(fd,b"eik-fixture",0):
+        error=c.get_errno()
+        if error in (errno.EPERM, errno.EACCES):
+            print("APFS positive fixture BLOCKED: snapshot creation permission denied; "
+                  "macOS requires a separately authorized snapshot entitlement. "
+                  "Native positive gate remains failed.", file=sys.stderr)
+        raise OSError(error,os.strerror(error))
 finally: os.close(fd)
 ' "$live"
 sudo mount_apfs -o rdonly,nobrowse,nodev,nosuid -s eik-fixture "$device" "$snap"
@@ -59,6 +81,3 @@ sudo umount "$snap"
 mounted=0
 hdiutil detach "$live"
 attached=0
-hdiutil attach -readonly -nobrowse -owners on -mountpoint "$live" "$image" >/dev/null
-attached=1
-python tools/check_apfs_fixture.py "$live" "$live" "$expected" --ordinary-readonly

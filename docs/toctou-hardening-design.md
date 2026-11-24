@@ -27,4 +27,6 @@ POSIX (Linux/macOS): ordinary read-only file descriptors do not block other writ
 5. CLI tests: explicit mode selection, no fallback, no success report on acquisition error; signed verification authenticates before evidence acquisition. Retain existing wire format and default compatibility behavior until explicitly reviewed.
 6. Run exact-head six-environment CI, inspect logs, retest owner deployment with synthetic fixtures, and obtain independent review and owner acceptance. The separate cryptographic provider gate remains required.
 
+Native APFS positive fixture provisioning is currently blocked by EPERM at fs_snapshot_create under sudo (run 45321827535). The Darwin API requires a separate entitlement. A normal read-only volume cannot stand in for a snapshot. Keep native negative checks separate, and obtain a trusted disposable snapshot via an authorized provisioning environment without altering system protection. Native positive tests remain mandatory.
+
 Do not claim comprehensive TOCTOU closure from a successful guarded Windows cohort. The release remains NO-GO until all applicable requirements and review are resolved.

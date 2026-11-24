@@ -15,20 +15,30 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def rejected(operation):
+def rejected(operation, reason=None):
     try:
         operation()
-    except (ValueError, OSError):
+    except (ValueError, OSError) as error:
+        if reason is not None:
+            require(reason in str(error), f'Unexpected rejection: {error}')
         return
     raise AssertionError('Expected APFS snapshot operation rejection')
 
 
 root, source, expected = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 require(os.geteuid() != 0, 'Fixture must run unprivileged')
-if len(sys.argv) == 5 and sys.argv[4] == '--ordinary-readonly':
-    require(os.statvfs(root).f_flag & os.ST_RDONLY, 'Fixture is not read-only')
-    rejected(lambda: kit.generate(root, ['nested/a'], apfs_source=expected))
-    print('APFS native fixture: ordinary read-only volume rejected PASS')
+if len(sys.argv) == 5:
+    from unittest.mock import patch
+    mode = sys.argv[4]
+    require(mode in ('--ordinary-readonly', '--ordinary-live'), 'Unknown fixture mode')
+    readonly = bool(os.statvfs(root).f_flag & os.ST_RDONLY)
+    require(readonly == (mode == '--ordinary-readonly'), 'Unexpected fixture read-only state')
+    require((root / 'nested/a').read_bytes() == b'AAAA', 'Fixture evidence missing')
+    with patch.object(kit.hashlib, 'file_digest') as digest:
+        rejected(lambda: kit.generate(root, ['nested/a'], apfs_source=expected),
+                 'requires a local read-only nodev snapshot mount')
+        require(not digest.called, 'Ordinary APFS volume reached hashing')
+    print(f'APFS native fixture: {mode[2:]} rejected before hashing PASS')
     raise SystemExit(0)
 names = ['nested/a', 'b']
 manifest = kit.generate(root, names, apfs_source=expected)

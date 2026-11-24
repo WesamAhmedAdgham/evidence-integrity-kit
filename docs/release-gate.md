@@ -38,6 +38,14 @@ PR #21 was merged with all twelve required checks passing for the pinned unsigne
 
 Native APFS setup at 5cb4d35 failed before snapshot creation: hdiutil rejected `-format UDRW` without a source. Use the documented blank-image `-type UDIF` option; native positive and negative fixture remains mandatory. Verify the actual subsequent logs before claiming remediation.
 
+## Native APFS capability blocker
+
+Exact run 45321827535 at ab73511934fac0a50df9dd86a9b7e278a9533076: both Darwin SDK ABI probes, blank APFS image creation, attach and synthetic population succeeded. Both native positive fixtures stopped at fs_snapshot_create with EPERM, despite sudo. The Darwin fs_snapshot_create(2) manual requires superuser privileges and an additional entitlement. This is a native fixture capability blocker; it is not proof that the APFS provider works or that EPERM alone identifies the exact missing entitlement. Do not disable SIP or security policy, use system-volume snapshots, or skip this positive requirement.
+
+The next fixture revision exercises ordinary live and read-only APFS volume rejection before the privileged creation attempt, asserts the expected native scope rejection and no hashing, and preserves failure on creation denial. For positive acceptance use a disposable synthetic APFS snapshot provisioned by an authorized entitled tool in a trusted macOS arm64 test environment, then run the existing unprivileged check_apfs_fixture.py and check_snapshot_signed.py against the independently identified mount. Record exact commit, native ABI, source identity, isolation results, and signed verification. No positive native acceptance until reproduced. The full six-environment CI and OpenSSL release gate remain mandatory.
+
+Reference: https://man.freebsd.org/cgi/man.cgi?query=fs_snapshot_create&sektion=2&manpath=macOS+26.7
+
 ## Historical baseline and cumulative review
 
 - Original published baseline: 60654e8265650bf74626198ddd9692acddf8071e.
