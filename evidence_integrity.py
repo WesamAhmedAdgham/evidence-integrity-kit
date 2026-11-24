@@ -17,6 +17,9 @@ MAX_PATH_COMPONENTS = 128
 MAX_ENTRIES = 10000
 MAX_TOTAL_COMPONENTS = 32768
 MAX_TOTAL_PATH_CHARS = 262144
+# Each component can retain a separate native handle; leave headroom for
+# transient validation handles and the Windows CRT descriptor table.
+MAX_WINDOWS_GUARD_COMPONENTS = 256
 
 
 # Use a conservative portable subset of Windows and POSIX filenames.
@@ -311,7 +314,70 @@ def check_native_change(root, name, expected, root_fd, baseline):
         raise ValueError(f'Evidence changed before operation completion: {name!r}')
 
 
-def generate(root, names):
+def check_windows_guard_budget(names):
+    """Reject unsupported hosts or excessive retained handles before evidence I/O."""
+    if os.name != 'nt':
+        raise ValueError('Windows deny-write mode unavailable on this platform')
+    if sum(name.count('/') + 1 for name in names) > MAX_WINDOWS_GUARD_COMPONENTS:
+        raise ValueError('Windows deny-write retained handle budget exceeded')
+
+
+def check_guarded_evidence(root, name, expected, directories, stream, root_fd, native_change):
+    from windows_root import file_change_time
+    revalidate_processed_file(root, name, expected, root_fd)
+    check_directory_chain(root, name, directories)
+    current = os.fstat(stream.fileno())
+    if (not current.st_ino or not os.path.samestat(expected, current) or
+            not stat.S_ISREG(current.st_mode) or current.st_nlink != 1 or
+            content_metadata_changed(expected, current) or
+            file_change_time(stream) != native_change):
+        raise ValueError(f'Guarded evidence changed: {name!r}')
+
+
+def windows_guarded_digests(root, names):
+    """Acquire all listed read handles before hashing; no weaker fallback.
+
+    The common protected interval ends before the first handle is released.
+    This is ordinary Win32 share exclusion, not an immutable snapshot.
+    """
+    from windows_root import guarded_windows_file, file_change_time
+    acquired = []
+    identities = {}
+    results = []
+    with pinned_root(root) as root_fd, ExitStack() as stack:
+        for name in names:
+            directories = sample_directory_chain(root, name)
+            _, expected = evidence_path(root, name)
+            stream = stack.enter_context(guarded_windows_file(
+                root, validate_relative_path(name), root_fd, deny_write=True))
+            opened = os.fstat(stream.fileno())
+            if (not expected.st_ino or not opened.st_ino or
+                    not os.path.samestat(expected, opened) or
+                    not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 or
+                    content_metadata_changed(expected, opened)):
+                raise ValueError(f'Guarded evidence identity or metadata changed: {name!r}')
+            register_identity(opened, name, identities)
+            native_change = file_change_time(stream)
+            acquired.append((name, expected, directories, stream, native_change))
+        # Every listed leaf now denies ordinary new write/delete opens.
+        # Check the whole cohort before consuming any evidence bytes.
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+            reader = SizedEvidenceReader(stream, expected.st_size)
+            value = hashlib.file_digest(reader, 'sha256').hexdigest()
+            if reader.remaining or not reader.eof_checked:
+                raise ValueError('Guarded evidence changed during hashing: incomplete read')
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+            results.append(value)
+        for name, expected, directories, stream, change in acquired:
+            check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
+        check_root_identity(root, root_fd)
+    return results
+
+
+def generate(root, names, *, deny_write=False):
     if not names:
         raise ValueError('A directory and unique file paths are required')
     check_path_budget(names)
@@ -320,9 +386,16 @@ def generate(root, names):
         check_path_collisions(name, prefixes)
     if len(set(names)) != len(names):
         raise ValueError('A directory and unique file paths are required')
+    if deny_write:
+        check_windows_guard_budget(names)
     root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('A directory and unique file paths are required')
+    if deny_write:
+        ordered = sorted(names)
+        values = windows_guarded_digests(root, ordered)
+        return {'version': 1, 'algorithm': 'sha256', 'files': [
+            {'path': name, 'sha256': value} for name, value in zip(ordered, values)]}
     files = []
     processed = []
     identities = {}
@@ -377,11 +450,19 @@ def validate_manifest(manifest, *, strict=False):
     return validated
 
 
-def verify(root, manifest):
+def verify(root, manifest, *, deny_write=False):
     validated = validate_manifest(manifest)
+    if deny_write:
+        check_windows_guard_budget(name for name, _ in validated)
     root = resolve_path(Path(root), strict=True)
     if not root.is_dir():
         raise ValueError('Evidence root must be a directory')
+    if deny_write:
+        values = windows_guarded_digests(root, [name for name, _ in validated])
+        results = [{'path': name, 'status': 'match' if value == expected else 'mismatch'}
+                   for (name, expected), value in zip(validated, values)]
+        return {'ok': all(r['status'] == 'match' for r in results), 'files': results,
+                'protection': {'mode': 'windows-deny-write', 'scope': 'listed-file-handles'}}
     results = []
     processed = []
     identities = {}
@@ -497,7 +578,7 @@ def sign_manifest_file(manifest_path, private_key_path):
     return sign_manifest_bytes(raw, key)
 
 
-def verify_signed(root, manifest_path, signature_path, public_key_path):
+def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_write=False):
     from manifest_signatures import MAX_SIGNATURE_FILE_BYTES, verify_manifest_signature
     from signing_keys import read_public_key, public_key_fingerprint
 
@@ -509,7 +590,7 @@ def verify_signed(root, manifest_path, signature_path, public_key_path):
     manifest = decode_manifest(raw)
     validate_manifest(manifest, strict=True)
     fingerprint = public_key_fingerprint(key)
-    result = verify(root, manifest)
+    result = verify(root, manifest, deny_write=True) if deny_write else verify(root, manifest)
     result['authentication'] = {
         'protocol': 'evidence-integrity-kit-ed25519-v1',
         'verified': True,
@@ -535,20 +616,25 @@ def main(argv=None):
     signed.add_argument('--manifest', required=True, type=Path)
     signed.add_argument('--signature', required=True, type=Path)
     signed.add_argument('--public-key', required=True, type=Path)
+    for command in (create, check, signed):
+        command.add_argument('--windows-deny-write', action='store_true',
+                             help='Hold all listed Windows file handles without write/delete sharing; fail closed')
     args = parser.parse_args(argv)
     try:
         if args.command == 'create':
-            result = generate(args.root, args.files)
+            result = generate(args.root, args.files, deny_write=True) if args.windows_deny_write else generate(args.root, args.files)
             code = 0
         elif args.command == 'sign':
             signature = sign_manifest_file(args.manifest, args.private_key)
             print(signature.decode('ascii'), end='')
             return 0
         elif args.command == 'verify-signed':
-            result = verify_signed(args.root, args.manifest, args.signature, args.public_key)
+            result = (verify_signed(args.root, args.manifest, args.signature, args.public_key, deny_write=True)
+                      if args.windows_deny_write else verify_signed(args.root, args.manifest, args.signature, args.public_key))
             code = 0 if result['ok'] else 1
         else:
-            result = verify(args.root, load_manifest(args.manifest))
+            manifest = load_manifest(args.manifest)
+            result = verify(args.root, manifest, deny_write=True) if args.windows_deny_write else verify(args.root, manifest)
             code = 0 if result['ok'] else 1
         output = json.dumps(result, indent=2, ensure_ascii=True)
         # ASCII serialization; allow for CRLF translation on Windows, including the final newline.

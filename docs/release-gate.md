@@ -24,6 +24,10 @@ Operational acceptance procedure: acquire an externally trusted immutable collec
 
 At `7e15309348bfb27c29c9ad886fd2848fabe3ebca`, the owner demonstrated with synthetic data that direct PyCA and EIK key loading and signature primitives work, while interactive getpass returned a single U+0016 (Ctrl+V) in two attempts and the exact intended passphrase in another. The CLI now rejects that literal control character before decryption, without echo, secret logging, stripping, or insecure fallback. Added mocked regression coverage and isolated native Windows console coverage. This is a fail-closed diagnostic improvement, not a universal clipboard/paste implementation. Exact-head CI and owner retest remain required. All existing release blockers remain in force.
 
+## Owner-rejected residual TOCTOU risk — experimental Windows cohort
+
+The owner did not accept the existing partial TOCTOU protection. EIK-R05/EIKA-02 remain open. The opt-in Windows deny-write mode is a bounded first implementation step: all listed file handles exclude ordinary write/delete sharing before hashing begins, same-handle native ChangeTime checks, retained descendant directory guards, whole-operation failure without weaker fallback, and a 256-component retained-handle budget. Native subprocess probes cover existing incompatible writers, writes and renames during hashing/final revalidation, and release on success/error. Require exact-head CI before crediting any results. This does not provide a verified immutable namespace, POSIX enforcement, protection beyond the common handle interval, or comprehensive TOCTOU resistance. Further design and owner review required.
+
 ## Historical baseline and cumulative review
 
 - Published main: 60654e8265650bf74626198ddd9692acddf8071e.

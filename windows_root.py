@@ -122,10 +122,11 @@ def pinned_windows_root(root):
         check_windows_root(root, guard)
 
 
-def checked_file_fd(path, flags):
+def checked_file_fd(path, flags, *, deny_write=False):
     """Open a read-only leaf without following its final reparse point."""
+    share = FILE_SHARE_READ if deny_write else FILE_SHARE_READ | FILE_SHARE_WRITE
     handle = _create(os.fspath(path), GENERIC_READ,
-                     FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
+                     share, None, OPEN_EXISTING,
                      FILE_FLAG_OPEN_REPARSE_POINT, None)
     if handle == INVALID_HANDLE_VALUE or handle is None:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -150,7 +151,7 @@ def checked_file_fd(path, flags):
 
 
 @contextmanager
-def guarded_windows_file(root, parts, guard):
+def guarded_windows_file(root, parts, guard, *, deny_write=False):
     """Hold checked directory handles while opening and reading one leaf.
 
     This uses absolute Win32 paths with pinned prefixes, not NT
@@ -175,7 +176,8 @@ def guarded_windows_file(root, parts, guard):
                         raise ValueError('Evidence directory identity changed')
 
         check_directories()
-        with open(path / parts[-1], 'rb', opener=checked_file_fd) as stream:
+        opener = (lambda leaf, flags: checked_file_fd(leaf, flags, deny_write=True)) if deny_write else checked_file_fd
+        with open(path / parts[-1], 'rb', opener=opener) as stream:
             check_directories()
             yield stream
             check_directories()
