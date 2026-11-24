@@ -2,6 +2,7 @@
 import ctypes
 import msvcrt
 import os
+import uuid
 from contextlib import ExitStack, contextmanager
 from ctypes import wintypes
 
@@ -21,6 +22,8 @@ FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
 FILE_BASIC_INFO_CLASS = 0
 FILE_ATTRIBUTE_TAG_INFO_CLASS = 9
 FILE_ID_INFO_CLASS = 18
+VOLUME_NAME_GUID = 0x1
+FILE_NAME_OPENED = 0x8
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 
@@ -63,14 +66,51 @@ _close.restype = wintypes.BOOL
 _file_type = _kernel.GetFileType
 _file_type.argtypes = [wintypes.HANDLE]
 _file_type.restype = wintypes.DWORD
+_final_path = _kernel.GetFinalPathNameByHandleW
+_final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+_final_path.restype = wintypes.DWORD
+_volume_info = _kernel.GetVolumeInformationByHandleW
+_volume_info.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD,
+                         ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+                         ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.DWORD]
+_volume_info.restype = wintypes.BOOL
+
+
+def local_ntfs_scope(handle):
+    """Conservatively require a local NTFS volume GUID on the actual handle."""
+    fs = ctypes.create_unicode_buffer(32)
+    if not _volume_info(handle, None, 0, None, None, None, fs, len(fs)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if fs.value.upper() != 'NTFS':
+        raise ValueError('Windows deny-write mode requires local NTFS')
+    # Volume GUID paths are not provided for network shares. Bound this query
+    # by the Win32 extended-path limit; fail rather than allocate unboundedly.
+    path = ctypes.create_unicode_buffer(32768)
+    count = _final_path(handle, path, len(path), VOLUME_NAME_GUID | FILE_NAME_OPENED)
+    if not count:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if count >= len(path):
+        raise ValueError('Windows guarded volume path exceeds limit')
+    prefix = '\\\\?\\Volume{'
+    name = path.value
+    if not name.casefold().startswith(prefix.casefold()):
+        raise ValueError('Windows deny-write mode requires a local volume GUID')
+    guid, separator, _ = name[len(prefix):].partition('}\\')
+    if not separator:
+        raise ValueError('Windows guarded volume GUID unavailable')
+    try:
+        return uuid.UUID(guid)
+    except ValueError:
+        raise ValueError('Windows guarded volume GUID invalid') from None
 
 
 @contextmanager
-def directory_handle(path):
+def directory_handle(path, *, deny_write=False):
     # Request directory listing access, not just attributes, so the handle
     # participates in sharing checks. Deliberately omit FILE_SHARE_DELETE.
+    share = FILE_SHARE_READ if deny_write else FILE_SHARE_READ | FILE_SHARE_WRITE
     handle = _create(os.fspath(path), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
-                     FILE_SHARE_READ | FILE_SHARE_WRITE, None, OPEN_EXISTING,
+                     share, None, OPEN_EXISTING,
                      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
     if handle == INVALID_HANDLE_VALUE or handle is None:
         raise ctypes.WinError(ctypes.get_last_error())
@@ -89,13 +129,30 @@ def directory_identity(handle):
     if (not attributes.attributes & FILE_ATTRIBUTE_DIRECTORY or
             attributes.attributes & FILE_ATTRIBUTE_REPARSE_POINT):
         raise ValueError('Evidence root must be a directory without reparse points')
+    return native_file_identity(handle)
+
+
+def native_file_identity(handle):
     identity = FileIdInfo()
     if not _info(handle, FILE_ID_INFO_CLASS, ctypes.byref(identity), ctypes.sizeof(identity)):
         raise ctypes.WinError(ctypes.get_last_error())
     identifier = bytes(identity.identifier)
     if not any(identifier):
-        raise ValueError('Evidence root identity unavailable')
+        raise ValueError('Native evidence identity unavailable')
     return identity.volume, identifier
+
+
+def file_guard_state(stream):
+    """Check the same held leaf's native identity, type, attributes and change time."""
+    handle = msvcrt.get_osfhandle(stream.fileno())
+    attributes = FileAttributeTagInfo()
+    if _file_type(handle) != FILE_TYPE_DISK:
+        raise ValueError('Evidence must be a disk file')
+    if not _info(handle, FILE_ATTRIBUTE_TAG_INFO_CLASS, ctypes.byref(attributes), ctypes.sizeof(attributes)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if attributes.attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT):
+        raise ValueError('Evidence leaf must be a regular file without reparse points')
+    return native_file_identity(handle), file_change_time(stream), attributes.attributes
 
 
 def check_windows_root(root, guard):
@@ -110,9 +167,10 @@ def check_windows_root(root, guard):
 
 
 @contextmanager
-def pinned_windows_root(root):
+def pinned_windows_root(root, *, deny_write=False):
     expected = root.lstat()
-    with directory_handle(root) as handle:
+    context = directory_handle(root, deny_write=True) if deny_write else directory_handle(root)
+    with context as handle:
         guard = handle, directory_identity(handle)
         current = root.lstat()
         if not expected.st_ino or not current.st_ino or not os.path.samestat(expected, current):
@@ -151,19 +209,24 @@ def checked_file_fd(path, flags, *, deny_write=False):
 
 
 @contextmanager
-def guarded_windows_file(root, parts, guard, *, deny_write=False):
+def guarded_windows_file(root, parts, guard, *, deny_write=False, volume_scope=None):
     """Hold checked directory handles while opening and reading one leaf.
 
     This uses absolute Win32 paths with pinned prefixes, not NT
     RootDirectory-relative opens. Callers must supply validated components.
     """
+    if deny_write and volume_scope is None:
+        raise ValueError('Windows deny-write volume scope required')
     check_windows_root(root, guard)
     with ExitStack() as stack:
         directories = []
         path = root
         for part in parts[:-1]:
             path = path / part
-            handle = stack.enter_context(directory_handle(path))
+            context = directory_handle(path, deny_write=True) if deny_write else directory_handle(path)
+            handle = stack.enter_context(context)
+            if deny_write and local_ntfs_scope(handle) != volume_scope:
+                raise ValueError('Guarded evidence directory crosses local NTFS volume')
             directories.append((path, handle, directory_identity(handle)))
 
         def check_directories():
@@ -178,6 +241,8 @@ def guarded_windows_file(root, parts, guard, *, deny_write=False):
         check_directories()
         opener = (lambda leaf, flags: checked_file_fd(leaf, flags, deny_write=True)) if deny_write else checked_file_fd
         with open(path / parts[-1], 'rb', opener=opener) as stream:
+            if deny_write and local_ntfs_scope(msvcrt.get_osfhandle(stream.fileno())) != volume_scope:
+                raise ValueError('Guarded evidence leaf crosses local NTFS volume')
             check_directories()
             yield stream
             check_directories()

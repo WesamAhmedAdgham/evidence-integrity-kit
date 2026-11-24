@@ -52,7 +52,7 @@ from ctypes import wintypes as w
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
-if sys.argv[2] == 'write':
+if sys.argv[2] in ('write', 'dir-open'):
     k = c.WinDLL('kernel32', use_last_error=True)
     create = k.CreateFileW
     create.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, c.c_void_p, w.DWORD, w.DWORD, w.HANDLE]
@@ -62,14 +62,17 @@ if sys.argv[2] == 'write':
     write = k.WriteFile
     write.argtypes = [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD), c.c_void_p]
     write.restype = w.BOOL
-    h = create(str(p), 0x40000000, 7, None, 3, 0, None)
+    directory = sys.argv[2] == 'dir-open'
+    h = create(str(p), 2 if directory else 0x40000000, 7, None, 3,
+               0x02000000 if directory else 0, None)
     if h is None or h == c.c_void_p(-1).value:
         print(c.get_last_error())
         sys.exit(1)
     try:
-        count = w.DWORD()
-        if not write(h, c.create_string_buffer(b'ZZZZ'), 4, c.byref(count), None) or count.value != 4:
-            sys.exit(3)
+        if not directory:
+            count = w.DWORD()
+            if not write(h, c.create_string_buffer(b'ZZZZ'), 4, c.byref(count), None) or count.value != 4:
+                sys.exit(3)
     finally:
         if not close(h):
             sys.exit(4)
@@ -97,6 +100,8 @@ else:
             self.assert_denied(self.b, 'write')
             self.assert_denied(self.a, 'rename')
             self.assert_denied(self.parent, 'rename')
+            self.assert_denied(self.parent, 'dir-open')
+            self.assert_denied(self.root, 'dir-open')
             return original(reader, algorithm)
         with patch.object(kit.hashlib, 'file_digest', side_effect=probe):
             report = kit.verify(self.root, self.manifest, deny_write=True)
@@ -106,6 +111,8 @@ else:
         self.assertEqual(self.a.read_bytes(), b'AAAA')
         self.assertEqual(self.b.read_bytes(), b'BBBB')
         self.assertEqual(self.attempt(self.a, 'write').returncode, 0)
+        self.assertEqual(self.attempt(self.parent, 'dir-open').returncode, 0)
+        self.assertEqual(self.attempt(self.root, 'dir-open').returncode, 0)
         self.assertEqual(self.attempt(self.parent, 'rename').returncode, 0)
 
     def test_preexisting_writer_aborts_before_hash_and_releases_earlier_leaf(self):
@@ -170,3 +177,38 @@ else:
         self.assertEqual(result.stdout, '')
         self.assertIn('Error:', result.stderr)
         self.assertNotIn('Traceback', result.stderr)
+
+
+    def test_existing_writable_mapping_refuses_before_hash(self):
+        import mmap
+        with self.a.open('r+b') as stream:
+            mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_WRITE)
+        with mapping:
+            with patch.object(kit.hashlib, 'file_digest') as digest:
+                with self.assertRaises(OSError) as error:
+                    kit.verify(self.root, self.manifest, deny_write=True)
+                self.assertIn(error.exception.winerror, (5, 32))
+                digest.assert_not_called()
+        self.assertTrue(kit.verify(self.root, self.manifest, deny_write=True)['ok'])
+
+    def test_native_volume_scope_uses_handles_and_rejects_mismatch(self):
+        import uuid
+        import windows_root as native
+        actual = native.local_ntfs_scope
+        with native.pinned_windows_root(self.root, deny_write=True) as root_fd:
+            scope = actual(root_fd[0])
+            self.assertIsInstance(scope, uuid.UUID)
+        calls = []
+        def changed(handle):
+            real_scope = actual(handle)
+            calls.append(real_scope)
+            if len(calls) == 2:
+                return uuid.UUID(int=real_scope.int ^ 1)
+            return real_scope
+        with patch.object(native, 'local_ntfs_scope', side_effect=changed), \
+                patch.object(kit.hashlib, 'file_digest') as digest:
+            with self.assertRaisesRegex(ValueError, 'crosses local NTFS volume'):
+                kit.verify(self.root, self.manifest, deny_write=True)
+            digest.assert_not_called()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(kit.verify(self.root, self.manifest, deny_write=True)['ok'])

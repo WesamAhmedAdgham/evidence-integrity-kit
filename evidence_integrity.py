@@ -322,15 +322,15 @@ def check_windows_guard_budget(names):
         raise ValueError('Windows deny-write retained handle budget exceeded')
 
 
-def check_guarded_evidence(root, name, expected, directories, stream, root_fd, native_change):
-    from windows_root import file_change_time
+def check_guarded_evidence(root, name, expected, directories, stream, root_fd, native_state):
+    from windows_root import file_guard_state
     revalidate_processed_file(root, name, expected, root_fd)
     check_directory_chain(root, name, directories)
     current = os.fstat(stream.fileno())
     if (not current.st_ino or not os.path.samestat(expected, current) or
             not stat.S_ISREG(current.st_mode) or current.st_nlink != 1 or
             content_metadata_changed(expected, current) or
-            file_change_time(stream) != native_change):
+            file_guard_state(stream) != native_state):
         raise ValueError(f'Guarded evidence changed: {name!r}')
 
 
@@ -340,16 +340,17 @@ def windows_guarded_digests(root, names):
     The common protected interval ends before the first handle is released.
     This is ordinary Win32 share exclusion, not an immutable snapshot.
     """
-    from windows_root import guarded_windows_file, file_change_time
+    from windows_root import guarded_windows_file, pinned_windows_root, local_ntfs_scope, file_guard_state
     acquired = []
     identities = {}
     results = []
-    with pinned_root(root) as root_fd, ExitStack() as stack:
+    with pinned_windows_root(root, deny_write=True) as root_fd, ExitStack() as stack:
+        volume_scope = local_ntfs_scope(root_fd[0])
         for name in names:
             directories = sample_directory_chain(root, name)
             _, expected = evidence_path(root, name)
             stream = stack.enter_context(guarded_windows_file(
-                root, validate_relative_path(name), root_fd, deny_write=True))
+                root, validate_relative_path(name), root_fd, deny_write=True, volume_scope=volume_scope))
             opened = os.fstat(stream.fileno())
             if (not expected.st_ino or not opened.st_ino or
                     not os.path.samestat(expected, opened) or
@@ -357,9 +358,12 @@ def windows_guarded_digests(root, names):
                     content_metadata_changed(expected, opened)):
                 raise ValueError(f'Guarded evidence identity or metadata changed: {name!r}')
             register_identity(opened, name, identities)
-            native_change = file_change_time(stream)
-            acquired.append((name, expected, directories, stream, native_change))
-        # Every listed leaf now denies ordinary new write/delete opens.
+            native_state = file_guard_state(stream)
+            if native_state[0][0] != root_fd[1][0]:
+                raise ValueError(f'Guarded evidence native volume changed: {name!r}')
+            acquired.append((name, expected, directories, stream, native_state))
+        # Every listed leaf and guarded directory now excludes ordinary
+        # incompatible write/delete opens; metadata access is a separate issue.
         # Check the whole cohort before consuming any evidence bytes.
         for name, expected, directories, stream, change in acquired:
             check_guarded_evidence(root, name, expected, directories, stream, root_fd, change)
@@ -462,7 +466,7 @@ def verify(root, manifest, *, deny_write=False):
         results = [{'path': name, 'status': 'match' if value == expected else 'mismatch'}
                    for (name, expected), value in zip(validated, values)]
         return {'ok': all(r['status'] == 'match' for r in results), 'files': results,
-                'protection': {'mode': 'windows-deny-write', 'scope': 'listed-file-handles'}}
+                'protection': {'mode': 'windows-deny-write', 'scope': 'local-ntfs-listed-file-and-directory-handles'}}
     results = []
     processed = []
     identities = {}
