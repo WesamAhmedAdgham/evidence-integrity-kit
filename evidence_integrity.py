@@ -7,6 +7,7 @@ import sys
 from pathlib import Path, PurePosixPath
 
 HEX = re.compile(r'[0-9a-f]{64}')
+MAX_MANIFEST_BYTES = 4 * 1024 * 1024
 
 
 def evidence_path(root, name):
@@ -80,8 +81,14 @@ def reject_nonfinite_constant(value):
 
 
 def load_manifest(path):
+    if not path.is_file():
+        raise ValueError('Manifest must be a regular file')
+    with path.open('rb') as stream:
+        raw = stream.read(MAX_MANIFEST_BYTES + 1)
+    if len(raw) > MAX_MANIFEST_BYTES:
+        raise ValueError(f'Manifest exceeds {MAX_MANIFEST_BYTES} byte limit')
     try:
-        return json.loads(path.read_text(encoding='utf-8'),
+        return json.loads(raw.decode('utf-8'),
                           object_pairs_hook=reject_duplicate_keys,
                           parse_constant=reject_nonfinite_constant)
     except RecursionError as exc:
@@ -105,7 +112,11 @@ def main(argv=None):
         else:
             result = verify(args.root, load_manifest(args.manifest))
             code = 0 if result['ok'] else 1
-        print(json.dumps(result, indent=2, ensure_ascii=True))
+        output = json.dumps(result, indent=2, ensure_ascii=True)
+        # ASCII serialization; allow for CRLF translation on Windows, including the final newline.
+        if args.command == 'create' and len(output) + output.count('\n') + 2 > MAX_MANIFEST_BYTES:
+            raise ValueError(f'Generated manifest exceeds {MAX_MANIFEST_BYTES} byte limit; split the file list')
+        print(output)
         return code
     except (OSError, ValueError) as exc:
         print(f'Error: {exc}', file=sys.stderr)
