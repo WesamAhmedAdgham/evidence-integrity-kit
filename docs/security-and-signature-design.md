@@ -1,16 +1,16 @@
 # Security model and signed-manifest v1 design
 
-Status: **proposal, implementation and independent review pending**.
+Status: **implemented experimental protocol; independent review and release approval pending**.
 Reviewed candidate baseline: a9b92e90afe62d654d1302f8a3fe357c40619da4.
 This design is AI-assisted; it is not a security audit or a release approval.
-The commands in this document are proposed interfaces, not available features.
+The commands below are implemented on the development candidate, not approved for production use.
 
 ## 1. Scope and trust boundaries
 
 Evidence Integrity Kit checks explicitly listed file bytes against SHA-256
 digests. A match is not a claim that a collection is exhaustive, legally
 admissible, authentic in origin, or captured at a specific time. A valid
-signature would authenticate manifest bytes relative to a trusted signing key,
+signature authenticates manifest bytes relative to a trusted signing key,
 not the original evidence collection process.
 
 Trusted prerequisites: the operator, executable and Python environment,
@@ -43,7 +43,7 @@ mutation are residual risks, not accepted as solved by passing unit tests.
 | Windows substituted links and root | Native directory/leaf guards, no delete sharing, reparse and identity checks | Not NT RootDirectory-relative traversal; reparse changes between samples remain possible |
 | File changes during read | Sampled identity and metadata checks | Same-size, reverted or metadata-indistinguishable changes may evade detection |
 | Earlier file changes during a batch | Final pathname metadata revalidation | Sequential checks are not an atomic snapshot |
-| Manifest forgery or alteration | Proposed detached Ed25519 signature | Requires a genuinely trusted public key |
+| Manifest forgery or alteration | Detached Ed25519 signature | Requires a genuinely trusted public key |
 | Signature stripping / downgrade | Separate fail-closed signed-verification command | Caller must enforce signed mode; unsigned mode does not authenticate |
 | Replay of a previously valid manifest | No automatic freshness or revocation claim | External retention, identity, timestamp and revocation policy needed |
 | Key theft or key substitution | Encrypted private key, trusted public-key distribution | Compromised key invalidates trust; no automatic recovery |
@@ -55,7 +55,7 @@ explicitly evaluate whether these boundaries satisfy the intended use case.
 The owner's comprehensive TOCTOU gate remains open until that decision and
 any required remediation are recorded.
 
-## 2. Proposed signature protocol
+## 2. Signature protocol
 
 Use standard Pure Ed25519 as specified in RFC 8032, through the maintained
 PyCA cryptography implementation. Do not implement curve arithmetic,
@@ -108,7 +108,7 @@ supported OS/Python combinations with the dependency installed. Test the
 absence of the dependency separately. Runtime remains offline; missing or
 unsupported crypto must fail closed, never degrade to unsigned verification.
 
-## 3. Proposed command semantics
+## 3. Command semantics
 
     python evidence_integrity.py sign --manifest manifest.json --private-key signer.pem
     python evidence_integrity.py verify-signed --root evidence --manifest manifest.json --signature manifest.sig --public-key trusted.pem
