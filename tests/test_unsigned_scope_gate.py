@@ -24,7 +24,7 @@ class ScopeGateTests(unittest.TestCase):
 
     def test_changed_runtime_or_regression_rejected(self):
         for name in ('evidence_integrity.py', 'windows_root.py', 'tests/test_audit_remediation.py',
-                     'tests/test_json_structure_budget.py'):
+                     'tests/test_json_structure_budget.py', 'tests/test_release_preflight.py'):
             entries = self.index()
             entries[name] = '0' * 40
             with self.subTest(name=name), self.assertRaises(ValueError):
