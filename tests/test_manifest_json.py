@@ -24,7 +24,7 @@ class ManifestJsonTests(unittest.TestCase):
 
     def run_cli(self, raw):
         self.path.write_text(raw, encoding='utf-8')
-        return subprocess.run([sys.executable, str(CLI), 'verify', '--root', str(self.root),
+        return subprocess.run([sys.executable, str(CLI), 'verify', '--assume-stable-tree', '--root', str(self.root),
                                '--manifest', str(self.path)], capture_output=True, text=True, timeout=10)
 
     def assert_rejected(self, raw, message):

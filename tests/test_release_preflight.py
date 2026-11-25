@@ -3,6 +3,8 @@ import contextlib
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -51,8 +53,8 @@ class ReleasePreflightTests(unittest.TestCase):
             resolve.assert_not_called()
 
     def test_cli_resolve_runtime_error_is_controlled(self):
-        for args in (['create', '--root', 'unused', 'a'],
-                     ['verify', '--root', 'unused', '--manifest', 'unused.json']):
+        for args in (['create', '--assume-stable-tree', '--root', 'unused', 'a'],
+                     ['verify', '--assume-stable-tree', '--root', 'unused', '--manifest', 'unused.json']):
             with self.subTest(args=args), patch.object(Path, 'resolve', side_effect=RuntimeError(
                     'Symlink loop')), patch.object(kit, 'load_manifest', return_value=manifest(['a'])):
                 out, err = io.StringIO(), io.StringIO()
@@ -62,6 +64,21 @@ class ReleasePreflightTests(unittest.TestCase):
                 self.assertIn('Unable to resolve path', err.getvalue())
                 self.assertNotIn('Traceback', err.getvalue())
 
+    def test_closed_output_pipe_returns_operational_error(self):
+        cli = Path(kit.__file__).resolve()
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'a').write_bytes(b'synthetic evidence')
+            reader, writer = os.pipe()
+            os.close(reader)
+            with os.fdopen(writer, 'wb') as sink:
+                result = subprocess.run(
+                    [sys.executable, str(cli), 'create', '--assume-stable-tree',
+                     '--root', temp, 'a'],
+                    stdout=sink, stderr=subprocess.PIPE, text=True, timeout=10,
+                )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stderr.strip(), 'Error: Unable to write output')
+
     @unittest.skipUnless(os.name == 'posix', 'POSIX symlink fixture')
     def test_real_symlink_loop_root_is_controlled(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -70,8 +87,8 @@ class ReleasePreflightTests(unittest.TestCase):
             loop.symlink_to('loop')
             control = root / 'manifest.json'
             control.write_text(json.dumps(manifest(['a'])), encoding='utf-8')
-            for args in (['create', '--root', str(loop), 'a'],
-                         ['verify', '--root', str(loop), '--manifest', str(control)]):
+            for args in (['create', '--assume-stable-tree', '--root', str(loop), 'a'],
+                         ['verify', '--assume-stable-tree', '--root', str(loop), '--manifest', str(control)]):
                 with self.subTest(args=args):
                     out, err = io.StringIO(), io.StringIO()
                     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
