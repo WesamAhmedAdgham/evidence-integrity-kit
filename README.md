@@ -17,7 +17,7 @@ Keep the manifest in separate trusted storage. Never redirect output into an inp
 
 ## Validation and bounds
 
-- Regular UTF-8 manifests up to 4 MiB; reject duplicate JSON keys, non-finite numbers and excessive nesting. Before JSON decoding, limit structural units (object/array opens, commas and colons outside strings) to 65,536 and nesting to 64. The byte limit still applies; this does not bound all memory or CPU costs. Compare sampled control-input identity, size, timestamps and byte count before decoding.
+- Regular UTF-8 manifests up to 4 MiB; reject duplicate JSON keys, non-finite numbers and excessive nesting. Before JSON decoding, limit structural units (object/array opens, commas and colons outside strings) to 65,536 and nesting to 64. Integer conversion is capped at 4,300 decimal digits (excluding a minus sign), even when the interpreter guard is disabled; a stricter host limit can reject earlier. The byte limit still applies; this does not bound all memory or CPU costs. Compare sampled control-input identity, size, timestamps and byte count before decoding.
 - Validate every listed path and digest before accessing evidence. Reject traversal, Windows device names, forbidden characters, Unicode/casefold path conflicts, duplicate names and file/directory conflicts. Preserve original spellings.
 - Maximum 10,000 entries, 32,768 aggregate components, 262,144 aggregate Unicode path characters, 128 components per path. These are preflight bounds, not limits on total evidence bytes or elapsed time.
 - Reject detected reparse points, symbolic links, multiply linked files and sampled identity aliases. Use native root/descendant guards on Windows and descriptor-relative opening on POSIX. Compare metadata before/after bounded hashing and during final batch revalidation; on Windows additionally sample native ChangeTime to detect certain restored-mtime modifications.
@@ -46,3 +46,5 @@ Use synthetic evidence, include reproducible steps, Python and OS versions, and 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+CLI stdout write/flush failures return operational error 2; a failing sink may already have accepted partial output. Discard partial output and retry with a working destination.
