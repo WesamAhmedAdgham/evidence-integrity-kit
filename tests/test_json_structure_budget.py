@@ -1,6 +1,7 @@
 """Regression tests for bounded JSON admission using synthetic inputs only."""
 import json
 import random
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -34,6 +35,17 @@ class JsonBudgetTests(unittest.TestCase):
         eik.decode_manifest(b'[' * n + b'0' + b']' * n)
         with self.assertRaisesRegex(ValueError, 'nesting budget'):
             eik.decode_manifest(b'[' * (n+1) + b'0' + b']' * (n+1))
+
+    def test_integer_digit_boundary_with_interpreter_limit_disabled(self):
+        previous = sys.get_int_max_str_digits()
+        self.addCleanup(sys.set_int_max_str_digits, previous)
+        sys.set_int_max_str_digits(0)
+        digits = b'1' * eik.MAX_JSON_INTEGER_DIGITS
+        for sign in (b'', b'-'):
+            with self.subTest(sign=sign):
+                self.assertEqual(eik.decode_manifest(sign + digits), int(sign + digits))
+                with self.assertRaisesRegex(ValueError, 'integer exceeds digit limit'):
+                    eik.decode_manifest(sign + digits + b'1')
 
     def test_large_string_does_not_consume_structural_budget(self):
         raw = b'"' + b'{},:[]' * ((eik.MAX_MANIFEST_BYTES - 2)//6) + b'"'

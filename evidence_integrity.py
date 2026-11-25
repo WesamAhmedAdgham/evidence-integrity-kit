@@ -571,6 +571,13 @@ def finite_json_float(value):
     return parsed
 
 
+def bounded_json_int(value):
+    digits = len(value) - value.startswith('-')
+    if digits > MAX_JSON_INTEGER_DIGITS:
+        raise ValueError('Manifest JSON integer exceeds digit limit')
+    return int(value)
+
+
 def read_control_bytes(path, *, limit, label):
     """Read bounded binary control input with sampled identity/stability checks."""
     if type(limit) is not int or limit < 0:
@@ -609,6 +616,8 @@ def read_manifest_bytes(path):
 
 MAX_JSON_STRUCTURE = 65536
 MAX_JSON_DEPTH = 64
+# Match CPython's default upper bound even if the host disables it.
+MAX_JSON_INTEGER_DIGITS = 4300
 
 
 def check_json_structure_budget(raw):
@@ -654,7 +663,8 @@ def decode_manifest(raw):
         return json.loads(raw.decode('utf-8'),
                           object_pairs_hook=reject_duplicate_keys,
                           parse_constant=reject_nonfinite_constant,
-                          parse_float=finite_json_float)
+                          parse_float=finite_json_float,
+                          parse_int=bounded_json_int)
     except RecursionError as exc:
         raise ValueError('Manifest JSON nesting exceeds decoder limit') from exc
 
@@ -697,6 +707,21 @@ def verify_signed(root, manifest_path, signature_path, public_key_path, *, deny_
     return result
 
 
+def write_cli_output(output, *, end='\n'):
+    try:
+        print(output, end=end, flush=True)
+    except OSError:
+        if __name__ == '__main__':
+            # Prevent interpreter shutdown from retrying the failed flush
+            # and overriding the CLI's operational-error exit status.
+            try:
+                with open(os.devnull, 'wb') as sink:
+                    os.dup2(sink.fileno(), sys.stdout.fileno())
+            except (OSError, ValueError):
+                pass
+        raise ValueError('Unable to write output') from None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -732,7 +757,7 @@ def main(argv=None):
             code = 0
         elif args.command == 'sign':
             signature = sign_manifest_file(args.manifest, args.private_key)
-            print(signature.decode('ascii'), end='')
+            write_cli_output(signature.decode('ascii'), end='')
             return 0
         elif args.command == 'verify-signed':
             result = (verify_signed(args.root, args.manifest, args.signature, args.public_key,
@@ -755,7 +780,7 @@ def main(argv=None):
         # ASCII serialization; allow for CRLF translation on Windows, including the final newline.
         if args.command == 'create' and len(output) + output.count('\n') + 2 > MAX_MANIFEST_BYTES:
             raise ValueError(f'Generated manifest exceeds {MAX_MANIFEST_BYTES} byte limit; split the file list')
-        print(output)
+        write_cli_output(output)
         return code
     except (OSError, ValueError) as exc:
         print(f'Error: {exc}', file=sys.stderr)
